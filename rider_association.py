@@ -218,4 +218,3 @@ def associate_people_to_bikes(persons, motorcycles, threshold=None):
         ]
 
     return result
-```
