@@ -15,6 +15,9 @@ MODE_VIDEO = "🎬 Video Inference"
 MODES = [MODE_IMAGE, MODE_VIDEO]
 
 TASK_TRIPLE_RIDING = "🚨 Triple Riding Detection"
+TASK_NO_HELMET = "🪖 No-Helmet Detection"
+TASK_COMBINED = "🚨 All Violations (Triple Riding + No Helmet)"
+TASKS = [TASK_TRIPLE_RIDING, TASK_NO_HELMET, TASK_COMBINED]
 
 # Pretrained Ultralytics models. No custom-trained weights are required.
 DETECTOR_MODELS = {
@@ -34,6 +37,15 @@ POSE_MODELS = {
 
 DEFAULT_DETECTOR = "YOLO26 Nano"
 DEFAULT_POSE = "YOLO26 Pose Nano"
+
+HELMET_MODELS = {
+    "YOLO11 Small Helmet (High Accuracy)": "helmet_yolo11s.pt",
+    "YOLOv8 Nano Helmet (Fast)": "helmet_yolov8n.pt",
+}
+DEFAULT_HELMET_MODEL = "YOLO11 Small Helmet (High Accuracy)"
+DEFAULT_HELMET_CONFIDENCE = 0.35
+HELMET_CLASS_WITH = 0
+HELMET_CLASS_WITHOUT = 1
 
 # COCO class IDs.
 PERSON_CLASS = 0
