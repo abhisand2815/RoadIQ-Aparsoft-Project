@@ -21,7 +21,14 @@ def render(confidence, association_threshold, detector_name, pose_name):
         analysis = detector.analyze(frame, tracking=False)
         result = detector.annotate(frame, analysis)
 
-    st.image(cv2.cvtColor(result, cv2.COLOR_BGR2RGB), use_container_width=True)
+    st.markdown("### 📷 Visual Comparison: Original vs. AI Detection")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("##### 📸 Original Real Image")
+        st.image(image, use_container_width=True)
+    with col2:
+        st.markdown("##### 🔍 AI Detected Image (Triple Riding)")
+        st.image(cv2.cvtColor(result, cv2.COLOR_BGR2RGB), use_container_width=True)
     cols = st.columns(4)
     cols[0].metric("Motorcycles", len(analysis.bikes))
     cols[1].metric("People", len(analysis.people))
