@@ -1,25 +1,49 @@
 """Configuration for RoadIQ Triple-Riding Detection using pretrained YOLO models only."""
+
 from pathlib import Path
 import shutil
 
+
 BASE_DIR = Path(__file__).resolve().parent
+
 WEIGHTS_DIR = BASE_DIR / "weights"
 VIDEOS_DIR = BASE_DIR / "videos"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 EVIDENCE_DIR = BASE_DIR / "evidence"
-for d in (WEIGHTS_DIR, VIDEOS_DIR, OUTPUTS_DIR, EVIDENCE_DIR):
+
+for d in (
+    WEIGHTS_DIR,
+    VIDEOS_DIR,
+    OUTPUTS_DIR,
+    EVIDENCE_DIR,
+):
     d.mkdir(parents=True, exist_ok=True)
+
 
 MODE_IMAGE = "📷 Image Inference"
 MODE_VIDEO = "🎬 Video Inference"
-MODES = [MODE_IMAGE, MODE_VIDEO]
+
+MODES = [
+    MODE_IMAGE,
+    MODE_VIDEO,
+]
+
 
 TASK_TRIPLE_RIDING = "🚨 Triple Riding Detection"
 TASK_NO_HELMET = "🪖 No-Helmet Detection"
 TASK_COMBINED = "🚨 All Violations (Triple Riding + No Helmet)"
-TASKS = [TASK_TRIPLE_RIDING, TASK_NO_HELMET, TASK_COMBINED]
+TASK_WRONG_WAY = "🚫 Wrong-Way Detection"
 
-# Pretrained Ultralytics models. No custom-trained weights are required.
+TASKS = [
+    TASK_TRIPLE_RIDING,
+    TASK_NO_HELMET,
+    TASK_COMBINED,
+    TASK_WRONG_WAY,
+]
+
+
+# Pretrained Ultralytics models.
+
 DETECTOR_MODELS = {
     "YOLO26 Nano": "yolo26n.pt",
     "YOLO26 Small": "yolo26s.pt",
@@ -28,6 +52,7 @@ DETECTOR_MODELS = {
     "YOLO11 Small": "yolo11s.pt",
 }
 
+
 POSE_MODELS = {
     "YOLO26 Pose Nano": "yolo26n-pose.pt",
     "YOLO26 Pose Small": "yolo26s-pose.pt",
@@ -35,53 +60,85 @@ POSE_MODELS = {
     "YOLO11 Pose Small": "yolo11s-pose.pt",
 }
 
+
 DEFAULT_DETECTOR = "YOLO26 Nano"
 DEFAULT_POSE = "YOLO26 Pose Nano"
+
 
 HELMET_MODELS = {
     "YOLO11 Small Helmet (High Accuracy)": "helmet_yolo11s.pt",
     "YOLOv8 Nano Helmet (Fast)": "helmet_yolov8n.pt",
 }
+
 DEFAULT_HELMET_MODEL = "YOLO11 Small Helmet (High Accuracy)"
+
 DEFAULT_HELMET_CONFIDENCE = 0.35
+
 HELMET_CLASS_WITH = 0
 HELMET_CLASS_WITHOUT = 1
 
+
 # COCO class IDs.
+
 PERSON_CLASS = 0
 MOTORCYCLE_CLASS = 3
+
 
 DEFAULT_CONFIDENCE = 0.35
 DEFAULT_IOU = 0.50
 DEFAULT_IMAGE_SIZE = 640
 
-# Association is deliberately transparent and pretrained-model based.
+
+# Association settings.
+
 MOTORCYCLE_EXPANSION = 0.25
 MAX_ASSOCIATION_DISTANCE = 1.35
 MIN_ASSOCIATION_IOU = 0.01
+
 POSE_BONUS_WEIGHT = 0.35
 DISTANCE_WEIGHT = 0.45
 OVERLAP_WEIGHT = 0.20
 
+
 DEFAULT_ASSOCIATION_THRESHOLD = 0.52
 DEFAULT_CONFIRMATION_FRAMES = 5
 MIN_CONFIRMATION_HITS = 3
+
 TRACK_BUFFER = 30
 TRACKER = "bytetrack.yaml"
+
 
 VIDEO_DISPLAY_WIDTH = 960
 VIDEO_DISPLAY_HEIGHT = 540
 VIDEO_SKIP_FRAMES = 0
 
+
 SAVE_EVIDENCE = True
 EVIDENCE_FRAME_COUNT = 5
 
-IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
-VIDEO_EXTENSIONS = [".mp4", ".avi", ".mov", ".mkv", ".webm"]
+
+IMAGE_EXTENSIONS = [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".webp",
+]
+
+VIDEO_EXTENSIONS = [
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".mkv",
+    ".webm",
+]
 
 
 def use_local_weights_dir() -> None:
-    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    WEIGHTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
 
 def resolve_model_path(model_name: str) -> str:
@@ -91,12 +148,23 @@ def resolve_model_path(model_name: str) -> str:
 
 def sweep_stray_weights() -> None:
     """Move auto-downloaded project-root .pt files into weights/."""
-    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    WEIGHTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     for file in BASE_DIR.glob("*.pt"):
+
         destination = WEIGHTS_DIR / file.name
+
         if destination.exists():
             continue
+
         try:
-            shutil.move(str(file), str(destination))
+            shutil.move(
+                str(file),
+                str(destination),
+            )
         except Exception:
             pass
