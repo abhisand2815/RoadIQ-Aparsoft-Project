@@ -15,6 +15,10 @@ st.set_page_config(
 )
 
 
+# ============================================================
+# SIDEBAR
+# ============================================================
+
 with st.sidebar:
 
     st.title("🏍️ RoadIQ")
@@ -52,7 +56,6 @@ with st.sidebar:
         ),
     )
 
-    # Default helmet values
     helmet_model_name = config.DEFAULT_HELMET_MODEL
     helmet_conf = config.DEFAULT_HELMET_CONFIDENCE
 
@@ -98,25 +101,29 @@ with st.sidebar:
     if task == config.TASK_TRIPLE_RIDING:
 
         st.caption(
-            "Triple-Riding: Uses pretrained YOLO detection + pose models with transparent geometric rider association."
+            "Triple-Riding: Uses YOLO and pose models "
+            "with geometric rider association."
         )
 
     elif task == config.TASK_NO_HELMET:
 
         st.caption(
-            "No-Helmet: Evaluates helmet compliance strictly for riders associated with motorcycles, ignoring pedestrians."
+            "No-Helmet: Checks helmet compliance for "
+            "riders associated with motorcycles."
         )
 
     elif task == config.TASK_COMBINED:
 
         st.caption(
-            "Combined: Detects both triple riding and no-helmet violations on motorcycles simultaneously."
+            "Combined: Detects triple riding and "
+            "no-helmet violations together."
         )
 
     elif task == config.TASK_WRONG_WAY:
 
         st.caption(
-            "Wrong-Way: Uses YOLO vehicle detection + ByteTrack to identify vehicles moving against the configured traffic direction."
+            "Wrong-Way: Tracks vehicles with ByteTrack "
+            "and checks movement against the allowed direction."
         )
 
 
@@ -234,14 +241,8 @@ elif task == config.TASK_COMBINED:
 elif task == config.TASK_WRONG_WAY:
 
     st.info(
-        "Upload a road video where normal traffic direction is clearly visible."
-    )
-
-    traffic_direction = st.selectbox(
-        "Normal traffic direction",
-        ["right", "left"],
-        index=0,
-        help="Choose the direction in which normal traffic is moving.",
+        "Upload a road video. RoadIQ tracks vehicles and "
+        "checks whether they move against the allowed direction."
     )
 
     uploaded = st.file_uploader(
@@ -282,7 +283,6 @@ elif task == config.TASK_WRONG_WAY:
                 confidence=confidence,
                 model_path=model_path,
                 video_path=str(video_path),
-                traffic_direction=traffic_direction,
             )
 
             if result:

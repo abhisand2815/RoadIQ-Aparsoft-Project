@@ -1,26 +1,13 @@
 import os
-import cv2
 import streamlit as st
-from ultralytics import YOLO
-from wrong_way import WrongWayDetector
 
-
-VEHICLE_CLASSES = {
-    2: "car",
-    3: "motorcycle",
-    5: "bus",
-    7: "truck",
-}
-
-
-@st.cache_resource
-def load_model(model_path):
-    return YOLO(model_path)
+from wrong_way import WrongWayDetector, process_video
 
 
 def render_image(*args, **kwargs):
-    st.warning(
-        "Wrong-Way Detection requires a video because vehicle movement direction is required."
+    st.info(
+        "Wrong-Way Detection requires video because "
+        "vehicle movement is tracked across frames."
     )
 
 
@@ -28,306 +15,91 @@ def render_video(
     confidence,
     model_path,
     video_path,
-    traffic_direction="right",
+    zones=None,
+    confirm_frames=4,
 ):
 
-    # Load YOLO model
-    model = load_model(model_path)
-
-    # Open input video
-    cap = cv2.VideoCapture(video_path)
-
-    if not cap.isOpened():
-        st.error("Could not open the video.")
+    if not video_path:
+        st.error("No video was provided.")
         return None
 
-    # Video information
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    if fps <= 0:
-        fps = 30.0
-
-    if width <= 0 or height <= 0:
-        cap.release()
-        st.error("Invalid video dimensions.")
+    if not os.path.exists(video_path):
+        st.error(f"Video was not found: {video_path}")
         return None
 
-    # Output folder
-    output_dir = "outputs/wrong_way_video"
-    os.makedirs(output_dir, exist_ok=True)
+    try:
+        detector = WrongWayDetector(
+            model_path=model_path,
+            zones=zones,
+            conf=float(confidence),
+            imgsz=640,
+            history_len=12,
+            min_displacement=10,
+            confirm_frames=int(confirm_frames),
+            warmup_frames=30,
+            opposite_angle=135,
+            tracker="bytetrack.yaml",
+        )
+
+    except Exception as exc:
+        st.error(f"Could not load YOLO model: {exc}")
+        return None
+
+    progress = st.progress(0)
+    status = st.empty()
+
+    def update_progress(value):
+        progress.progress(float(value))
+        status.text(
+            f"Processing wrong-way detection: "
+            f"{int(value * 100)}%"
+        )
+
+    output_dir = os.path.join(
+        "outputs",
+        "wrong_way_video"
+    )
+
+    os.makedirs(
+        output_dir,
+        exist_ok=True
+    )
 
     output_path = os.path.join(
         output_dir,
         "wrong_way_result.mp4"
     )
 
-    # OpenCV VideoWriter
-    fourcc_function = getattr(
-        cv2,
-        "VideoWriter_fourcc"
+    result = process_video(
+        in_path=video_path,
+        out_path=output_path,
+        detector=detector,
+        progress_cb=update_progress,
     )
-
-    fourcc = fourcc_function(
-        *"mp4v"
-    )
-
-    writer = cv2.VideoWriter(
-        output_path,
-        fourcc,
-        fps,
-        (width, height)
-    )
-
-    if not writer.isOpened():
-        cap.release()
-        st.error(
-            "Could not create the output video. "
-            "Please check OpenCV video codec support."
-        )
-        return None
-
-    # Wrong-way detector
-    detector = WrongWayDetector(
-        traffic_direction=traffic_direction,
-        history_size=10,
-        min_movement=10.0,
-        confirmation_frames=5
-    )
-
-    # Streamlit UI
-    progress = st.progress(0)
-    status = st.empty()
-    preview = st.empty()
-
-    wrong_way_ids = set()
-    frame_count = 0
-
-    # ========================================================
-    # PROCESS VIDEO
-    # ========================================================
-
-    while True:
-
-        success, frame = cap.read()
-
-        if not success:
-            break
-
-        # YOLO tracking
-        results = model.track(
-            frame,
-            conf=float(confidence),
-            tracker="bytetrack.yaml",
-            persist=True,
-            verbose=False
-        )
-
-        # Compatible with current Ultralytics setup
-        result = next(iter(results))
-
-        output = frame.copy()
-
-        # ====================================================
-        # VEHICLE DETECTION
-        # ====================================================
-
-        if (
-            result.boxes is not None
-            and len(result.boxes) > 0
-        ):
-
-            boxes = result.boxes.xyxy.tolist()
-            classes = result.boxes.cls.tolist()
-
-            if result.boxes.id is not None:
-
-                track_ids = (
-                    result.boxes.id.tolist()
-                )
-
-            else:
-
-                track_ids = [
-                    None
-                ] * len(boxes)
-
-            # =================================================
-            # PROCESS EACH VEHICLE
-            # =================================================
-
-            for box, class_id, track_id in zip(
-                boxes,
-                classes,
-                track_ids
-            ):
-
-                class_id = int(class_id)
-
-                # Ignore non-vehicle classes
-                if class_id not in VEHICLE_CLASSES:
-                    continue
-
-                x1, y1, x2, y2 = map(
-                    int,
-                    box
-                )
-
-                vehicle_name = (
-                    VEHICLE_CLASSES[class_id]
-                )
-
-                wrong_way = False
-
-                # =============================================
-                # TRACK MOVEMENT
-                # =============================================
-
-                if track_id is not None:
-
-                    track_id = int(track_id)
-
-                    center = (
-                        (x1 + x2) / 2,
-                        (y1 + y2) / 2
-                    )
-
-                    wrong_way = detector.update(
-                        track_id,
-                        center
-                    )
-
-                    if wrong_way:
-
-                        wrong_way_ids.add(
-                            track_id
-                        )
-
-                # =============================================
-                # DRAW RESULT
-                # =============================================
-
-                if wrong_way:
-
-                    box_color = (
-                        0,
-                        0,
-                        255
-                    )
-
-                    text = (
-                        f"WRONG WAY | "
-                        f"{vehicle_name}"
-                    )
-
-                else:
-
-                    box_color = (
-                        0,
-                        255,
-                        0
-                    )
-
-                    text = vehicle_name
-
-                cv2.rectangle(
-                    output,
-                    (x1, y1),
-                    (x2, y2),
-                    box_color,
-                    2
-                )
-
-                cv2.putText(
-                    output,
-                    text,
-                    (
-                        x1,
-                        max(y1 - 10, 25)
-                    ),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    box_color,
-                    2
-                )
-
-        # ====================================================
-        # WRITE OUTPUT FRAME
-        # ====================================================
-
-        writer.write(output)
-
-        frame_count += 1
-
-        # ====================================================
-        # PROGRESS
-        # ====================================================
-
-        if total_frames > 0:
-
-            progress.progress(
-                min(
-                    frame_count / total_frames,
-                    1.0
-                )
-            )
-
-        status.text(
-            f"Processing frame "
-            f"{frame_count}/{total_frames}"
-        )
-
-        # Show preview every 10 frames
-        if frame_count % 10 == 0:
-
-            preview.image(
-                cv2.cvtColor(
-                    output,
-                    cv2.COLOR_BGR2RGB
-                ),
-                channels="RGB"
-            )
-
-    # ========================================================
-    # CLOSE VIDEO
-    # ========================================================
-
-    cap.release()
-    writer.release()
 
     progress.empty()
     status.empty()
-    preview.empty()
 
-    # ========================================================
-    # CHECK OUTPUT
-    # ========================================================
-
-    if not os.path.exists(output_path):
-
-        st.error(
-            "Output video was not created."
-        )
-
+    if result is None:
+        st.error("Output video was not created.")
         return None
 
-    # ========================================================
-    # RESULT
-    # ========================================================
+    if not os.path.exists(result):
+        st.error("Output video does not exist.")
+        return None
 
-    if wrong_way_ids:
+    if os.path.getsize(result) == 0:
+        st.error("Output video is empty.")
+        return None
 
-        st.warning(
-            f"Wrong-way vehicles detected: "
-            f"{len(wrong_way_ids)}"
+    if detector.flagged:
+        st.error(
+            f"Wrong-way vehicle(s) detected: "
+            f"{len(detector.flagged)}"
         )
-
     else:
-
-        st.info(
-            "No wrong-way vehicles detected."
+        st.success(
+            "No confirmed wrong-way vehicles detected."
         )
 
-    return output_path
+    return result
