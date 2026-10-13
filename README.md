@@ -139,6 +139,14 @@ Returns:
 - If nobody pushes signal state, `stop_line` violations are not reported. Do not
   guess the phase.
 
+In this repository, the signal endpoint and tracked-video stop-line flow are
+contract documentation only; the current Streamlit stop-line service analyzes
+single images and cannot confirm a crossing. Its signed distance is relative to
+the detected `p1` → `p2` endpoint order. Configure `approach_side_sign` per
+camera (`1` for the positive-distance approach side, `-1` for the negative side);
+without calibration, results remain side-relative position statuses, not
+`BEFORE_LINE` / `BEYOND_LINE` classifications.
+
 ### A violation event
 
 ```json
