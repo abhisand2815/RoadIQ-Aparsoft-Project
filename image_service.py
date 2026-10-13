@@ -1,4 +1,4 @@
-"""Image inference UI for RoadIQ."""
+
 
 import cv2
 import numpy as np
@@ -20,10 +20,7 @@ def render(
 ):
     st.header("RoadIQ — Image Analysis")
 
-    # ---------------------------------------------------------
-    # SELECT DETECTION TYPE
-    # ---------------------------------------------------------
-
+    # Select detection type
     analysis_type = st.radio(
         "Select Detection Type",
         [
@@ -35,31 +32,18 @@ def render(
 
     st.markdown("---")
 
-    # ---------------------------------------------------------
-    # IMAGE UPLOAD
-    # ---------------------------------------------------------
-
+    # Image upload
     uploaded = st.file_uploader(
         "Upload a road image",
-        type=[
-            "jpg",
-            "jpeg",
-            "png",
-            "bmp",
-            "webp",
-        ],
+        type=["jpg", "jpeg", "png", "bmp", "webp"],
     )
 
     if not uploaded:
         st.info("Upload a road image to begin analysis.")
         return
 
-    # ---------------------------------------------------------
-    # LOAD IMAGE
-    # ---------------------------------------------------------
-
+    # Load image
     image = Image.open(uploaded).convert("RGB")
-
     frame = cv2.cvtColor(
         np.array(image),
         cv2.COLOR_RGB2BGR,
@@ -68,13 +52,10 @@ def render(
     # =========================================================
     # TRIPLE RIDING
     # =========================================================
-
     if analysis_type == "Triple Riding":
-
         st.subheader("Triple-Riding Detection")
 
         with st.spinner("Running triple-riding analysis..."):
-
             detector = TripleRidingDetector(
                 confidence,
                 association_threshold,
@@ -92,7 +73,6 @@ def render(
                 triple_analysis,
             )
 
-        # Display result
         st.image(
             cv2.cvtColor(
                 triple_result,
@@ -101,7 +81,7 @@ def render(
             use_container_width=True,
         )
 
-        # Metrics
+        # Triple-riding metrics
         cols = st.columns(4)
 
         cols[0].metric(
@@ -130,9 +110,7 @@ def render(
     # =========================================================
     # STOP-LINE CROSSING
     # =========================================================
-
     else:
-
         st.subheader("Stop-Line Crossing Detection")
 
         approach_direction = st.selectbox(
@@ -145,32 +123,33 @@ def render(
             index=0,
             help="Specify which side of the stop line vehicles approach from.",
         )
+
         approach_side_sign = (
             1
             if "Bottom" in approach_direction
-            else (-1 if "Top" in approach_direction else None)
+            else (
+                -1
+                if "Top" in approach_direction
+                else None
+            )
         )
 
         with st.spinner(
             "Detecting stop line, traffic signal, and vehicles..."
         ):
-
             stop_line_service = StopLineService(
                 confidence=confidence,
                 detector_name=detector_name,
                 approach_side_sign=approach_side_sign,
             )
 
-            stop_line_analysis = (
-                stop_line_service.analyze(frame)
-            )
+            stop_line_analysis = stop_line_service.analyze(frame)
 
             stop_line_result = draw_stop_line_analysis(
                 frame,
                 stop_line_analysis,
             )
 
-        # Display result
         st.image(
             cv2.cvtColor(
                 stop_line_result,
@@ -179,44 +158,38 @@ def render(
             use_container_width=True,
         )
 
-        # Stop line status
+        # Stop-line status and metrics
         if stop_line_analysis.stop_line is None:
-
-            st.error(
-                "Stop line could not be detected."
-            )
+            st.error("Stop line could not be detected.")
 
         else:
-
             cols = st.columns(2)
 
+            traffic_signal = stop_line_analysis.traffic_signal
+
             sig_state = (
-                stop_line_analysis.traffic_signal.state
-                if stop_line_analysis.traffic_signal
+                traffic_signal.state
+                if traffic_signal
                 else "UNKNOWN"
             )
+
             cols[0].metric(
                 "Traffic Signal",
                 sig_state,
             )
 
-            active_beyond_count = len(
-                stop_line_analysis.violation_candidates
-                if (
-                    stop_line_analysis.traffic_signal
-                    and stop_line_analysis.traffic_signal.state == "RED"
+            if sig_state == "RED":
+                active_beyond_count = len(
+                    stop_line_analysis.violation_candidates
                 )
-                else (
-                    []
-                    if (
-                        stop_line_analysis.traffic_signal
-                        and stop_line_analysis.traffic_signal.state != "RED"
-                    )
-                    else stop_line_analysis.potential_violations
+            elif sig_state != "UNKNOWN":
+                active_beyond_count = 0
+            else:
+                active_beyond_count = len(
+                    stop_line_analysis.potential_violations
                 )
-            )
 
             cols[1].metric(
                 "Beyond Stop Line",
                 active_beyond_count,
-            )
+            )
