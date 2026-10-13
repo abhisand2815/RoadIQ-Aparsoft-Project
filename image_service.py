@@ -1,4 +1,4 @@
-
+"""Image inference UI for RoadIQ."""
 
 import cv2
 import numpy as np

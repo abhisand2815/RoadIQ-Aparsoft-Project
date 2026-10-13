@@ -1,604 +1,122 @@
-# RoadIQ
-### Aparsoft Road Intelligence Prototype
+# RoadIQ — Triple Riding: Status & Test Log
 
-> **RoadIQ** is a computer-vision road-safety prototype focused on
-> detecting **triple riding on two-wheelers** from images and videos,
-> generating annotated results and evidence packets that can later be
-> connected to the broader Apar Drishti traffic-violation platform.
+Status snapshot of the triple-riding detection pipeline (`app.py`, `image_service.py`, `triple_riding_service.py`, `rider_association.py`), current as of this test batch.
 
-🔗 **Repository:** `https://github.com/abhisand2815/RoadIQ-Aparsoft-Project`
-
+**Config used for all tests below:** Detector `YOLO26 Nano`, Pose `YOLO26 Pose Nano`, Detection confidence `0.35`, Rider association threshold `0.52`.
 
 ---
 
+## Summary
 
-## 1. Project Overview
+| # | Riders visible | Riders detected | Status shown | Verdict |
+|---|---|---|---|---|
+| 1 | 4 | 4 (RIDER 3 at 174%) | CANDIDATE | Confidence overflow bug; not confirmed |
+| 2 | 1–2 per bike | Correct | — | Correct (no violation present) |
+| 3 | mixed, 1 bike has 2 | Correct | — | Correct, but label clutter |
+| 4 | 1–2 per bike | Correct | PERSON NOT ASSOCIATED ×2 | Missed association |
+| 5 | 1–2 per bike | Correct | PERSON NOT ASSOCIATED | Missed association |
+| 6 | 1–2 per bike | Correct | — | Correct |
+| 7 | 2 (same bike) | 1 | PERSON NOT ASSOCIATED | Missed association (false negative) |
+| 8 | 4 | 4 (garbled %) | CANDIDATE | Real violation, not confirmed |
+| 9 | 4 | 4 (174%) | CANDIDATE | Same case as #1, repeat capture |
+| 10 | 2 | 2 | — | Correct |
+| 11 | 2 | 2 | — | Correct |
+| 12 | 4 | 4 | **Triple Riding = 1** | Correctly confirmed |
+| 13 | 3 | 3 | CANDIDATE, duplicate label | Real violation, not confirmed + label bug |
+| 14 | 2 rider + 1 pedestrian | 2 | PERSON NOT ASSOCIATED | Ambiguous — needs manual check |
 
-RoadIQ is being developed as a roadside-camera intelligence system.
-
-The original project brief defines a broader target system with four
-traffic violations:
-
-  -----------------------------------------------------------------------
-  Violation               Definition              Current RoadIQ focus
-  ----------------------- ----------------------- -----------------------
-  `no_helmet`             Rider/pillion without   Planned
-                          helmet                  
-
-  `triple_riding`         3+ people on one        **Current focus**
-                          two-wheeler             
-
-  `wrong_way`             Vehicle moving against  Planned
-                          permitted direction     
-                          
-  `stop_line`             Vehicle crosses stop    Planned
-                          line while signal is    
-                          red                     
-                          
-  -----------------------------------------------------------------------
+Out of 5 frames with an actual 3+ rider motorcycle (1, 8, 9, 12, 13), only **#12** was confirmed as `Triple Riding`. The rest stayed at `CANDIDATE` and never converted.
 
 ---
 
+## Recurring issues
 
-# 2. Current Technical Scope
-
-### Input modes
-
-RoadIQ supports:
-
--   Image inference
--   Video inference
--   Uploaded images/videos
--   Stored videos from the `videos/` directory
--   Stored images from the `iamges/` directory
-
-### Core pipeline
-
-``` text
-Image / Video
-     ↓
-YOLO Object Detection
-     ↓
-Person + Motorcycle Detection
-     ↓
-YOLO Pose
-     ↓
-Human Keypoints
-     ↓
-Person ↔ Motorcycle Association
-     ↓
-Rider Count per Motorcycle
-     ↓
-3+ Riders?
-     ↓
-Temporal Confirmation (Video)
-     ↓
-Triple-Riding Event
-     ↓
-Annotated Output + Evidence
-```
-
-For video, the system uses tracking so a motorcycle can retain an
-identity across frames instead of being treated as a new object every
-frame.
-
+1. **CANDIDATE never resolves to CONFIRMED on single images.** Frames 1, 8, 9, 13 all detect 3–4 riders on one motorcycle correctly but stay labeled `CANDIDATE` and the `Triple Riding` counter stays at 0. Only frame 12 converted. Candidate → confirmed likely requires the temporal confirmation step, which by design only runs on video — single-image inference may need its own confirmation path instead of inheriting the video-only gate.
+2. **Confidence values exceeding 100%.** Frame 1/9 shows `RIDER 3 | 174%`. Confidence should be clamped to [0, 100].
+3. **"PERSON | NOT ASSOCIATED" on riders who are clearly seated on a visible bike** (frames 4, 5, 7, 14). Frame 7 is the clearest case: two people are on the same motorcycle, tightly overlapping, but only one gets associated — the pillion rider is dropped, undercounting a 2-rider bike as 1. This points to the rider-association geometry/pose threshold being too strict when riders overlap heavily (motion blur in frame 7 likely compounds it).
+4. **Overlapping/unreadable on-image labels** when multiple bikes are close together (frames 2, 3, 4, 13). Text for adjacent `BIKE n | RIDERS n` boxes stacks on top of each other. Cosmetic, but makes manual QA harder.
+5. **Duplicate label rendering** in frame 13 — `PERSON 4 | NOT ASSOCIATED` is drawn twice at the same position.
 
 ---
 
+## Per-image detail
 
-# 3. What Each File Does
+### Test 1
+![Test 1](Image_Triple/test_01.png)
 
-## `app.py` --- Frontend / Application Entry Point
+4 people clearly on one motorcycle. Detected as `BIKE 1 | RIDERS 4 | CANDIDATE`. `RIDER 3` shows `174%` confidence — value exceeds the valid 0–100% range. Never converts to a confirmed triple-riding event despite 4 riders being correctly counted.
 
-This is the Streamlit entry point.
+### Test 2
+![Test 2](Image_Triple/test_02.png)
 
-It is responsible for:
+Three motorcycles, 1–2 riders each, no violation present. Rider counts are correct (`Motorcycles 3, People 2, Riders 2, Triple Riding 0`). Labels for `BIKE 3`, `BIKE 2`, `BIKE 4` overlap and are hard to read.
 
--   Launching the RoadIQ UI
--   Selecting Image or Video mode
--   Selecting detector and pose models
--   Showing model benchmark information
--   Configuring confidence and IoU thresholds
--   Configuring rider-association thresholds
--   Configuring temporal confirmation
--   Calling image/video services
--   Displaying runtime metrics and generated results
+### Test 3
+![Test 3](Image_Triple/test_03.png)
 
-Run the project with:
+Dense street scene, 5 motorcycles, 8 people. Rider counts per bike (1, 1, 1, 1, 2) look correct and `Person 6` is correctly flagged as unassociated (pedestrian, no bike nearby). Label text is heavily overlapped across the cluster on the right.
 
-``` bash
-streamlit run app.py
-```
+### Test 4
+![Test 4](Image_Triple/test_04.png)
 
-Think of `app.py` as the **control panel**, not the AI engine.
+Five motorcycles in a crowd. Two people are marked `PERSON | NOT ASSOCIATED` even though they appear to be walking alongside/behind riders rather than on a bike — plausibly correct, but the grey boxes sit close enough to the bikes that it's worth a manual check. Label overlap on `BIKE 0/9` makes the rider count for those two illegible.
 
+### Test 5
+![Test 5](Image_Triple/test_05.png)
 
----
+Three motorcycles. `BIKE 6 | RIDERS 2` is correct. One `PERSON | NOT ASSOCIATED` near bike 6 — same ambiguity as test 4, likely a pedestrian rather than a missed rider.
 
+### Test 6
+![Test 6](Image_Triple/test_06.png)
 
-## `config.py` --- Central Configuration
+Three motorcycles/scooters, all 1–2 riders, correctly counted (`Motorcycles 3, People 4, Riders 4, Triple Riding 0`). No violation present. Labels for `BIKE 5/6` overlap.
 
-This is the project's central configuration layer.
+### Test 7
+![Test 7](Image_Triple/test_07.png)
 
-It contains:
+Blurry, motion-heavy frame. Two people clearly seated on the same motorcycle, but only the front rider is counted (`RIDER 0`); the pillion rider is labeled `PERSON | NOT ASSOCIATED`. Result: `Riders 1` when it should be `2`. This is a clear rider-association miss, likely because motion blur degrades the pose keypoints used for association.
 
--   Project directories
--   Supported model registry
--   Detector models
--   Pose models
--   Default models
--   COCO class IDs
--   Confidence thresholds
--   IoU thresholds
--   Image-size options
--   Rider-association parameters
--   Temporal confirmation parameters
--   Tracking configuration
--   Evidence configuration
--   Published model reference metrics
+### Test 8
+![Test 8](Image_Triple/test_08.png)
 
-Keeping these values centralized prevents different services from
-silently using different thresholds.
+Four men on one motorcycle — an actual triple/quadruple-riding case. Detected as `BIKE 0 | RIDERS 4 | CANDIDATE`. Confidence labels for riders 1–3 are garbled/overlapping and partly unreadable. Never confirms as a triple-riding event.
 
+### Test 9
+![Test 9](Image_Triple/test_09.png)
 
----
+Same scene as Test 1, second capture (includes a thumbnail inset in the corner). Same result: `BIKE 1 | RIDERS 4 | CANDIDATE`, `RIDER 3 | 174%`. Confirms the confidence-overflow bug is reproducible, not a one-off.
 
+### Test 10
+![Test 10](Image_Triple/test_10.png)
 
-## `model_loader.py` --- Model Loading and Caching
+Close crop, two people on a scooter. Correctly detected as `Riders 2`, no violation. No errors observed.
 
-This file manages model initialization.
+### Test 11
+![Test 11](Image_Triple/test_11.png)
 
-It provides loaders for:
+Two people on a scooter, correctly detected as `BIKE 2 | RIDERS 2`. No errors observed.
 
--   Standard YOLO models
--   YOLO detector models
--   YOLO pose models
--   YOLO World / YOLOE compatibility where configured
--   Fresh model instances where isolated tracking state is required
+### Test 12
+![Test 12](Image_Triple/test_12.png)
 
-It also handles:
+Four schoolboys on one scooter, with an auto-rickshaw in the background. Correctly detected as `BIKE 5 | RIDERS 4 | CANDIDATE`, and this is the **only test case where the counter shows `Triple Riding 1`** — i.e., the only frame where a real violation was actually confirmed rather than left at `CANDIDATE`. `Person 5` in the rickshaw is correctly excluded as not associated with the scooter.
 
--   Local `weights/` lookup
--   Ultralytics model resolution/download
--   Streamlit model caching
--   CPU/GPU device selection
+### Test 13
+![Test 13](Image_Triple/test_13.png)
 
-### Important
+Three people on one scooter — a real violation. Detected as `BIKE 7 | RIDERS 3 | CANDIDATE`, but never confirms. `PERSON 4 | NOT ASSOCIATED` is rendered twice, stacked on the same position — a label-rendering duplication bug, not just overlap with another box.
 
-The project uses **pretrained checkpoints**, not custom RoadIQ-trained
-`.pt` checkpoints.
+### Test 14
+![Test 14](Image_Triple/test_14.png)
 
-The rider-association stage is currently a transparent geometry + pose
-scoring layer.
-
+Two riders on a motorcycle plus a third person standing near it. Detected as `BIKE 0 | RIDERS 2`, third person `PERSON 2 | NOT ASSOCIATED`. Plausibly correct (pedestrian rather than rider), but worth a manual check since the person is close to the bike.
 
 ---
 
-
-## `image_service.py` --- Image Inference
-
-This service handles single-image processing.
-
-It:
-
-1.  Receives an image.
-2.  Runs the selected detector.
-3.  Detects people and motorcycles.
-4.  Runs the selected pose model.
-5.  Associates people with motorcycles.
-6.  Counts riders.
-7.  Detects triple-riding candidates.
-8.  Annotates the image.
-9.  Saves the result under `outputs/`.
-10. Creates evidence when a triple-riding candidate is found.
-
-Typical generated result:
-
-``` text
-outputs/
-└── test_image_triple_riding.jpg
-```
-
-
----
-
-
-## `video_service.py` --- Video Inference
-
-This service handles video processing.
-
-It performs:
-
-1.  Video loading.
-2.  Frame-by-frame inference.
-3.  YOLO object detection.
-4.  YOLO pose inference.
-5.  Tracking.
-6.  Rider-to-motorcycle association.
-7.  Temporal confirmation.
-8.  Triple-riding confirmation.
-9.  Frame annotation.
-10. Output-video generation.
-11. Evidence generation.
-
-Runtime metrics include:
-
--   FPS / approximate FPS
--   Inference latency
--   Detection confidence
--   Maximum riders on a motorcycle
--   Confirmed tracks
-
-Typical output:
-
-``` text
-outputs/
-└── test_video_triple_riding.mp4
-```
-
-
----
-
-
-## `triple_riding_service.py` --- Core Triple-Riding Engine
-
-This is the central business/ML service for the current feature.
-
-It combines:
-
-``` text
-YOLO Detector
-     +
-YOLO Pose
-     +
-Rider Association
-     +
-Rider Counting
-     +
-Temporal Confirmation
-```
-
-The core decision is based on whether a motorcycle has **three or more
-associated people**.
-
-This file should remain focused on the triple-riding pipeline rather
-than becoming a general-purpose UI module.
-
-
----
-
-
-## `rider_association.py` --- Person-to-Motorcycle Association
-
-
-This is one of the most important parts of RoadIQ.
-
-YOLO can tell us:
-
-``` text
-Person A
-Person B
-Person C
-Motorcycle 1
-Motorcycle 2
-```
-
-but detection alone does not tell us which person belongs to which
-motorcycle.
-
-This module uses geometric and pose-related cues to estimate:
-
-``` text
-Person A → Motorcycle 1
-Person B → Motorcycle 1
-Person C → Motorcycle 1
-```
-
-and therefore:
-
-``` text
-Motorcycle 1 → 3 riders
-```
-
-This is currently **not a learned custom classifier**.
-
-### Future improvement
-
-A stronger learned rider-association model can be introduced later if
-labeled rider-to-vehicle association data becomes available.
-
-
----
-
-
-## `association.py` --- Legacy / Alternate Association Logic
-
-This file exists in the repository separately from
-`rider_association.py`.
-
-It should be treated carefully during cleanup.
-
-Before extending it, the team should verify whether it is imported by
-the active application path.
-
-Suggested check:
-
-``` bash
-grep -R "import association\|from association" .
-```
-
-If it is not part of the active pipeline, it should either be documented
-as legacy code or removed after team approval.
-
-
----
-
-
-## `triple_riding.py` --- Legacy / Alternate Triple-Riding Implementation
-
-This file is separate from:
-
-``` text
-triple_riding_service.py
-```
-
-The active architecture should have **one clearly defined triple-riding
-pipeline**.
-
-The team should check imports and runtime usage before modifying both
-files independently.
-
-Suggested check:
-
-``` bash
-grep -R "import triple_riding\|from triple_riding" .
-```
-
-If unused, keep it documented as legacy until the team decides whether
-to remove it.
-
-
----
-
-
-## `evidence_service.py` --- Evidence Generation
-
-**Owner:** Backend / Evidence
-
-This service creates evidence artifacts after a triple-riding
-event/candidate is identified.
-
-Evidence can contain:
-
--   Key frames
--   Annotated evidence frame
--   Vehicle crop
--   Event metadata in JSON
-
-Example:
-
-``` text
-evidence/
-└── VIDEO_TRIPLE_20260917_130845/
-    └── bike_7/
-        ├── frame_001.jpg
-        ├── frame_002.jpg
-        ├── frame_003.jpg
-        ├── frame_004.jpg
-        ├── frame_005.jpg
-        ├── vehicle_crop.jpg
-        └── event.json
-```
-
-## `requirements.txt` --- Python Dependencies
-
-Defines the main runtime packages, including:
-
--   Streamlit
--   Ultralytics
--   OpenCV
--   NumPy
--   Pillow
--   PyTorch
--   TorchVision
-
-Install with:
-
-``` bash
-pip install -r requirements.txt
-```
-
-
----
-
-
-# 4. Folder Structure
-
-``` text
-RoadIQ/
-│
-├── app.py
-├── config.py
-├── model_loader.py
-│
-├── image_service.py
-├── video_service.py
-├── triple_riding_service.py
-├── rider_association.py
-├── association.py
-├── triple_riding.py
-├── evidence_service.py
-│
-├── requirements.txt
-├── README.md
-├── .gitignore
-│
-├── images/
-│   └── .gitkeep
-│
-├── videos/
-│   └── .gitkeep
-│
-├── weights/
-│   ├── .gitkeep
-│   └── *.pt
-│
-├── outputs/
-│   └── .gitkeep
-│
-└── evidence/
-    └── .gitkeep
-```
-
-
----
-
-
-# 5. Generated Files
-
-## Image inference
-
-``` text
-outputs/
-└── <image>_triple_riding.jpg
-```
-
-If a triple-riding candidate is generated:
-
-``` text
-evidence/
-└── IMAGE_TRIPLE_<timestamp>/
-    └── bike_<id>/
-        ├── evidence_frame.jpg
-        ├── vehicle_crop.jpg
-        └── event.json
-```
-
-## Video inference
-
-``` text
-outputs/
-└── <video>_triple_riding.mp4
-```
-
-Evidence:
-
-``` text
-evidence/
-└── VIDEO_TRIPLE_<timestamp>/
-    └── bike_<track_id>/
-        ├── frame_001.jpg
-        ├── frame_002.jpg
-        ├── frame_003.jpg
-        ├── frame_004.jpg
-        ├── frame_005.jpg
-        ├── vehicle_crop.jpg
-        └── event.json
-```
-
-
----
-
-
-# 6. Model Strategy
-
-The current project deliberately uses **pretrained models**.
-
-### Detector families
-
-Configured model families include:
-
--   YOLO26
--   YOLO11
--   YOLO12
--   YOLOv10
--   YOLOv8
-
-with model sizes such as:
-
-``` text
-Nano
-Small
-Medium
-Large
-XLarge
-```
-
-# 7. Running the Project
-
-## 1. Clone
-
-``` bash
-git clone https://github.com/abhisand2815/RoadIQ-Aparsoft-Project.git
-cd RoadIQ-Aparsoft-Project
-```
-
-## 2. Create environment
-
-``` bash
-python -m venv .venv
-```
-
-macOS/Linux:
-
-``` bash
-source .venv/bin/activate
-```
-
-Windows:
-
-``` bash
-.venv\Scripts\activate
-```
-
-## 3. Install dependencies
-
-``` bash
-pip install -r requirements.txt
-```
-
-## 4. Download default models
-
-``` bash
-python download_models.py
-```
-
-## 5. Run
-
-``` bash
-streamlit run app.py
-```
-
-
----
-
-## Project Goal
-
-By the end of the development cycle, RoadIQ should move from:
-
-``` text
-YOLO detects objects
-```
-
-to:
-
-``` text
-Camera
-  ↓
-Detection
-  ↓
-Tracking
-  ↓
-Rider association
-  ↓
-Violation reasoning
-  ↓
-Temporal confirmation
-  ↓
-Evidence packet
-  ↓
-API/event integration
-```
-
-That is the transition from a computer-vision demo to a deployable
-road-intelligence prototype.
+## Open items
+
+- Fix confidence clamping (0–100%) in the rider-confidence display path.
+- Investigate why `CANDIDATE → confirmed` only fired once (test 12) out of five genuine 3+ rider cases on single images — check whether temporal confirmation is unintentionally gating single-image results.
+- Re-check rider-association scoring under motion blur / heavy overlap (test 7 undercount).
+- Fix duplicate label rendering (test 13).
+- Consider de-overlapping on-image text labels when bounding boxes are close together (tests 2, 3, 4, 13).

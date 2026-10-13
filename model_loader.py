@@ -121,6 +121,21 @@ def load_pose_model(model_name: str) -> YOLO:
 
 
 # -------------------------------------------------------------------
+# ROADIQ HELMET DETECTOR LOADER
+# -------------------------------------------------------------------
+
+def load_helmet_model(model_name: str) -> YOLO:
+    """
+    Load a fine-tuned/pretrained YOLO helmet detection model.
+
+    Classes:
+        0: 'With Helmet'
+        1: 'Without Helmet'
+    """
+    return _load_yolo_cached(model_name)
+
+
+# -------------------------------------------------------------------
 # WORLD MODEL
 # -------------------------------------------------------------------
 
