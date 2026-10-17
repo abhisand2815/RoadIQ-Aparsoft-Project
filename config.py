@@ -48,12 +48,14 @@ TASK_TRIPLE_RIDING = "🚨 Triple Riding Detection"
 TASK_NO_HELMET = "🪖 No-Helmet Detection"
 TASK_COMBINED = "🚨 All Violations (Triple Riding + No Helmet)"
 TASK_WRONG_WAY = "🚫 Wrong-Way Detection"
+TASK_STOP_LINE = "🛑 Red Light & Stop-Line Detection"
 
 TASKS = [
     TASK_TRIPLE_RIDING,
     TASK_NO_HELMET,
     TASK_COMBINED,
     TASK_WRONG_WAY,
+    TASK_STOP_LINE,
 ]
 
 
@@ -91,12 +93,13 @@ DEFAULT_POSE = "YOLO11 Pose Nano"
 # ============================================================
 
 HELMET_MODELS = {
+    "YOLO26 Large PPE/Helmet (High Accuracy)": "ppe_yolo26l_96e.pt",
     "YOLO11 Small Helmet (High Accuracy)": "helmet_yolo11s.pt",
     "YOLOv8 Nano Helmet (Fast)": "helmet_yolov8n.pt",
 }
 
 DEFAULT_HELMET_MODEL = (
-    "YOLO11 Small Helmet (High Accuracy)"
+    "YOLO26 Large PPE/Helmet (High Accuracy)"
 )
 
 DEFAULT_HELMET_CONFIDENCE = 0.35
@@ -213,11 +216,30 @@ def resolve_model_path(model_name: str) -> str:
     Otherwise return the model name so that
     Ultralytics can load/download the official model.
     """
+    # 1. Direct path check
+    p = Path(model_name)
+    if p.exists():
+        return str(p.resolve())
 
+    # 2. Local weights directory
     local_path = WEIGHTS_DIR / model_name
-
     if local_path.exists():
         return str(local_path)
+
+    # 3. Project root
+    root_path = BASE_DIR / model_name
+    if root_path.exists():
+        return str(root_path)
+
+    # 4. Known sibling project directories
+    candidates = [
+        BASE_DIR.parent / "Project_Aparsoft" / "RoadIQ-Aparsoft-Project-main" / "weights" / model_name,
+        BASE_DIR.parent / "Project_Aparsoft" / "RoadIQ-Aparsoft-Project-backup" / "weights" / model_name,
+        BASE_DIR.parent / "RoadIQ-Aparsoft-Project-main" / "weights" / model_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
 
     return model_name
 
