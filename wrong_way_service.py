@@ -1,6 +1,8 @@
 import os
+import cv2
 import streamlit as st
 
+import config
 from wrong_way import WrongWayDetector, process_video
 
 
@@ -27,16 +29,31 @@ def render_video(
         st.error(f"Video was not found: {video_path}")
         return None
 
+    if os.path.getsize(video_path) < 1000:
+        st.error(
+            "The selected video file is invalid or too small (< 1 KB, e.g. a Git LFS pointer text file). "
+            "Please upload or select an actual MP4 video."
+        )
+        return None
+
+    test_cap = cv2.VideoCapture(str(video_path))
+    if not test_cap.isOpened():
+        test_cap.release()
+        st.error("OpenCV could not open this video file. Please ensure it is a valid MP4 format.")
+        return None
+    test_cap.release()
+
     try:
+        resolved_model = config.resolve_model_path(model_path)
         detector = WrongWayDetector(
-            model_path=model_path,
+            model_path=resolved_model,
             zones=zones,
             conf=float(confidence),
             imgsz=640,
             history_len=12,
             min_displacement=10,
             confirm_frames=int(confirm_frames),
-            warmup_frames=30,
+            warmup_frames=20,
             opposite_angle=135,
             tracker="bytetrack.yaml",
         )
@@ -56,7 +73,7 @@ def render_video(
         )
 
     output_dir = os.path.join(
-        "outputs",
+        str(config.OUTPUTS_DIR),
         "wrong_way_video"
     )
 
