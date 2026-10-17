@@ -61,6 +61,24 @@ class HelmetAnalysis:
     pedestrians: List[Person]
 
 
+def compute_box_iou(boxA: Tuple[float, float, float, float], boxB: Tuple[float, float, float, float]) -> float:
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+    interW = max(0.0, xB - xA)
+    interH = max(0.0, yB - yA)
+    interArea = interW * interH
+    if interArea <= 0.0:
+        return 0.0
+    areaA = max(1.0, (boxA[2] - boxA[0]) * (boxA[3] - boxA[1]))
+    areaB = max(1.0, (boxB[2] - boxB[0]) * (boxB[3] - boxB[1]))
+    unionArea = areaA + areaB - interArea
+    if unionArea <= 0.0:
+        return 0.0
+    return interArea / unionArea
+
+
 class HelmetDetector:
     def __init__(
         self,
@@ -184,54 +202,122 @@ class HelmetDetector:
         return head_center, head_box
 
     @staticmethod
-    def validate_helmet_vs_mask_or_hat(person: Person, h_box: Tuple[float, float, float, float], label: str) -> Tuple[bool, Optional[str]]:
+    def is_no_helmet_label(label: str) -> bool:
+        """
+        Check if detection label represents NOT wearing a helmet/hardhat.
+        Matches: 'NO-Hardhat', 'Without Helmet', 'Without', 'no_helmet', 'no-helmet', etc.
+        """
+        c = label.strip().lower()
+        return (
+            "no-hardhat" in c
+            or "no_hardhat" in c
+            or "without" in c
+            or "no helmet" in c
+            or "no_helmet" in c
+            or "no-helmet" in c
+        )
+
+    @staticmethod
+    def is_helmet_label(label: str) -> bool:
+        """
+        Check if detection label represents wearing a helmet/hardhat.
+        Matches: 'Hardhat', 'With Helmet', 'Helmet', 'with_helmet', etc.
+        Explicitly excludes any negative/without classes.
+        """
+        c = label.strip().lower()
+        if HelmetDetector.is_no_helmet_label(c):
+            return False
+        return "hardhat" in c or "helmet" in c
+
+    @staticmethod
+    def is_headwear_class(label: str) -> bool:
+        """
+        Filter to only helmet/headwear classes, discarding other PPE classes
+        such as 'Mask', 'Safety Vest', 'Person', 'vehicle', 'machinery', etc.
+        """
+        return HelmetDetector.is_helmet_label(label) or HelmetDetector.is_no_helmet_label(label)
+
+    @staticmethod
+    def is_mask_label(label: str) -> bool:
+        """Check if label corresponds to a face mask class."""
+        c = label.strip().lower()
+        return "mask" in c and "no-mask" not in c and "no_mask" not in c
+
+    @staticmethod
+    def validate_helmet_vs_mask_or_hat(
+        person: Person,
+        h_box: Tuple[float, float, float, float],
+        label: str,
+        detected_masks: Optional[List[Tuple[float, float, float, float]]] = None,
+    ) -> Tuple[bool, Optional[str]]:
         """
         Anatomical verification:
-        Ensures that face masks and hats/caps are not falsely accepted as motorcycle helmets.
-
-        1. Face Mask Rejection:
-           A mask covers only the lower half of the face (nose/mouth/chin).
-           A real helmet MUST cover the upper cranium and forehead, so its top edge
-           (hy1) must extend well above the eye line. If hy1 >= eye_y - 0.08*hh,
-           it covers only the mouth/chin and is a MASK, not a helmet!
-
-        2. Hat / Baseball Cap Rejection:
-           A baseball cap or sun hat is very shallow, covers only the crown,
-           and leaves the ears completely exposed below it. A motorcycle helmet
-           is rounded/bulbous (height/width ratio >= 0.45) and covers down to ears/jawline.
+        Ensures that face masks and hats/caps are not falsely accepted as motorcycle helmets,
+        while strictly preventing real helmets from being falsely rejected.
         """
-        if "Without" in label:
+        if HelmetDetector.is_no_helmet_label(label):
             return True, None
 
         hx1, hy1, hx2, hy2 = h_box
         hw = max(1.0, hx2 - hx1)
         hh = max(1.0, hy2 - hy1)
+        hcy = (hy1 + hy2) / 2.0
+        px1, py1, px2, py2 = person.box
+        ph = max(1.0, py2 - py1)
         kp = person.keypoints
 
-        if kp is not None and len(kp) >= 5:
-            eyes = [kp[i][1] for i in (1, 2) if kp[i][2] > 0.25]
-            nose = kp[0][1] if kp[0][2] > 0.25 else None
-            ears = [kp[i] for i in (3, 4) if kp[i][2] > 0.25]
+        # 0. Check against explicit detected Mask boxes from PPE model
+        if detected_masks:
+            for m_box in detected_masks:
+                if compute_box_iou(h_box, m_box) > 0.22:
+                    return False, "Face mask detected (overlaps detected mask)"
 
-            # 1. Mask Check: If top of detection is at/below the eye level, it's a face mask!
+        # 1. Pose Keypoint Validation
+        if kp is not None and len(kp) >= 5:
+            eyes = [kp[i][1] for i in (1, 2) if kp[i][2] > 0.20]
+            nose = kp[0][1] if kp[0][2] > 0.20 else None
+            ears = [kp[i] for i in (3, 4) if kp[i][2] > 0.20]
+
+            # A. Face Mask Check (mouth/chin covered, forehead/crown exposed):
             if eyes:
                 eye_y = sum(eyes) / len(eyes)
-                if hy1 >= eye_y - 0.08 * hh:
+                # If top of detection starts at or below the eye line -> Mask on lower face!
+                if hy1 >= eye_y - 0.06 * hh:
                     return False, "Face mask detected (mouth/chin covered, cranium exposed)"
+                # If center of detection is far below eyes -> Centered on mouth/chin!
+                if hcy > eye_y + 0.32 * hh:
+                    return False, "Face mask detected (centered on lower face)"
 
             if nose is not None and not eyes:
-                if hy1 >= nose - 0.08 * hh:
-                    return False, "Face mask detected (lower face covered)"
+                if hy1 >= nose - 0.08 * hh or hcy > nose:
+                    return False, "Face mask detected (covers lower face/chin)"
 
-            # 2. Hat / Shallow Cap Check:
-            if ears and eyes:
-                ear_y = sum(p[1] for p in ears) / len(ears)
-                # If ears are far below the box and the box is very shallow -> Hat/Cap
-                if hy2 < ear_y and (hh / hw) < 0.52:
-                    return False, "Hat / Cap detected (ears exposed, shallow brim)"
+            # B. Hat / Baseball Cap Check (ears and lower face exposed):
+            if ears:
+                ear_y = min(p[1] for p in ears)  # Topmost ear level
+                # If bottom of headwear is above or at top of ears (ears exposed):
+                if hy2 <= ear_y + 0.03 * hh:
+                    if eyes:
+                        eye_y = sum(eyes) / len(eyes)
+                        # Bottom of detection sits near eyebrow line without covering ears/cheeks
+                        if hy2 <= eye_y + 0.25 * hh:
+                            return False, "Hat / Cap detected (ears & face exposed below brim)"
+                    if (hh / hw) < 0.55:
+                        return False, "Hat / Cap detected (shallow crown, ears exposed)"
 
-        # 3. Geometric Aspect Ratio: A motorcycle helmet is rounded/deep (hh/hw >= 0.45)
-        if (hh / hw) < 0.42:
+            if eyes and not ears:
+                eye_y = sum(eyes) / len(eyes)
+                # Detection ends right at eyebrows and is shallow
+                if hy2 <= eye_y + 0.06 * hh and (hh / hw) < 0.48:
+                    return False, "Hat / Cap detected (shallow brim, eyebrows exposed)"
+
+        # 2. Body-Proportional Validation (when keypoints are partial/occluded)
+        # A real helmet sits directly on top of the head (hy1 near ry1)
+        if hy1 > py1 + 0.14 * ph:
+            return False, "Lower face/neck covering detected (not on head crown)"
+
+        # 3. Geometric Aspect Ratio (only reject extremely flat brims/headbands)
+        if (hh / hw) < 0.32:
             return False, "Hat / Cap detected (flat brim aspect ratio)"
 
         return True, None
@@ -280,7 +366,9 @@ class HelmetDetector:
             roles[r.track_id] = ("Person (Sitting Behind)", False)
         return roles
 
-    def _extract_helmet_detections(self, frame: np.ndarray) -> List[HelmetDetection]:
+    def _extract_helmet_detections(
+        self, frame: np.ndarray
+    ) -> Tuple[List[HelmetDetection], List[Tuple[float, float, float, float]]]:
         results = self.helmet_model.predict(
             frame,
             conf=self.helmet_confidence,
@@ -289,8 +377,9 @@ class HelmetDetector:
         )[0]
 
         detections = []
+        detected_masks = []
         if results.boxes is None or len(results.boxes) == 0:
-            return detections
+            return detections, detected_masks
 
         boxes = results.boxes.xyxy.cpu().numpy()
         classes = results.boxes.cls.cpu().numpy().astype(int)
@@ -298,6 +387,10 @@ class HelmetDetector:
 
         for box, cls_id, conf in zip(boxes, classes, confs):
             label = self.helmet_model.names.get(cls_id, str(cls_id))
+            if self.is_mask_label(label):
+                detected_masks.append(tuple(map(float, box)))
+            if not self.is_headwear_class(label):
+                continue
             detections.append(
                 HelmetDetection(
                     label=label,
@@ -306,7 +399,7 @@ class HelmetDetector:
                     class_id=int(cls_id),
                 )
             )
-        return detections
+        return detections, detected_masks
 
     def _crop_head_inference(
         self, frame: np.ndarray, head_box: Tuple[float, float, float, float]
@@ -342,7 +435,33 @@ class HelmetDetector:
         classes = results.boxes.cls.cpu().numpy().astype(int)
         confs = results.boxes.conf.cpu().numpy()
 
-        best_idx = int(np.argmax(confs))
+        headwear_indices = [
+            i
+            for i in range(len(classes))
+            if self.is_headwear_class(
+                self.helmet_model.names.get(int(classes[i]), str(classes[i]))
+            )
+        ]
+        if not headwear_indices:
+            return None
+
+        crop_h = crop.shape[0]
+        # Prioritize helmet detected on the upper cranium of the cropped head
+        valid_helmet_idxs = [
+            i
+            for i in headwear_indices
+            if self.is_helmet_label(
+                self.helmet_model.names.get(int(classes[i]), str(classes[i]))
+            )
+            and boxes[i][1] < 0.45 * crop_h
+            and confs[i] >= 0.20
+        ]
+
+        if valid_helmet_idxs:
+            best_idx = max(valid_helmet_idxs, key=lambda i: confs[i])
+        else:
+            best_idx = max(headwear_indices, key=lambda i: confs[i])
+
         cls_id = int(classes[best_idx])
         conf = float(confs[best_idx])
         label = self.helmet_model.names.get(cls_id, str(cls_id))
@@ -425,7 +544,7 @@ class HelmetDetector:
         riders = [p for p in people if p.track_id in rider_people_ids]
 
         # 3. Detect helmets in full frame
-        helmet_detections = self._extract_helmet_detections(frame)
+        helmet_detections, detected_masks = self._extract_helmet_detections(frame)
 
         # 4. Associate helmet detections specifically with riders' heads
         rider_matched_dets: Dict[int, List[HelmetDetection]] = {
@@ -438,24 +557,28 @@ class HelmetDetector:
             hcy = (hy1 + hy2) / 2.0
 
             best_rider = None
-            min_dist = float("inf")
+            best_score = -float("inf")
 
             for r in riders:
                 (rcx, rcy), head_box = self.get_head_geometry(r)
                 rx1, ry1, rx2, ry2 = r.box
-                rw = rx2 - rx1
-                rh = ry2 - ry1
+                rw = max(1.0, rx2 - rx1)
+                rh = max(1.0, ry2 - ry1)
 
-                # Helmet center must lie within the upper region of the rider
+                # Helmet center must lie within head / upper neck zone of rider
                 if (rx1 - 0.25 * rw) <= hcx <= (rx2 + 0.25 * rw) and (
-                    ry1 - 0.20 * rh
-                ) <= hcy <= (ry1 + 0.45 * rh):
-                    dist = math.hypot(hcx - rcx, hcy - rcy)
-                    if dist < min_dist:
-                        min_dist = dist
+                    ry1 - 0.25 * rh
+                ) <= hcy <= (ry1 + 0.32 * rh):
+                    iou = compute_box_iou(h_det.box, head_box)
+                    norm_dx = abs(hcx - rcx) / rw
+                    norm_dy = abs(hcy - rcy) / rh
+                    # Prioritize overlap with head_box to prevent driver/pillion swapping
+                    score = (iou * 2.5) - (norm_dx * 1.5 + norm_dy * 1.0)
+                    if score > best_score:
+                        best_score = score
                         best_rider = r
 
-            if best_rider is not None:
+            if best_rider is not None and best_score > -1.2:
                 rider_matched_dets[best_rider.track_id].append(h_det)
 
         # 5. Build RiderHelmetInfo with role & mask/hat validation
@@ -472,44 +595,73 @@ class HelmetDetector:
             matched = rider_matched_dets[r.track_id]
 
             selected_det: Optional[HelmetDetection] = None
+            rejection_note = None
 
             if matched:
-                no_helmets = [d for d in matched if "Without" in d.label]
-                with_helmets = [d for d in matched if "Without" not in d.label]
+                no_helmets = [d for d in matched if self.is_no_helmet_label(d.label)]
+                with_helmets = [d for d in matched if self.is_helmet_label(d.label)]
 
-                if no_helmets and with_helmets:
-                    best_no = max(no_helmets, key=lambda d: d.confidence)
-                    best_with = max(with_helmets, key=lambda d: d.confidence)
-                    selected_det = best_no if best_no.confidence >= best_with.confidence else best_with
+                # Check if any with_helmet detection is anatomically valid
+                valid_with = []
+                rejected_with = []
+                for wh in with_helmets:
+                    is_valid, reason = self.validate_helmet_vs_mask_or_hat(
+                        r, wh.box, wh.label, detected_masks
+                    )
+                    if is_valid:
+                        valid_with.append(wh)
+                    else:
+                        rejected_with.append((wh, reason))
+
+                if valid_with:
+                    # Verified helmet on the rider's head!
+                    selected_det = max(valid_with, key=lambda d: d.confidence)
+                    status = "WITH_HELMET"
+                    conf = float(selected_det.confidence)
+                    helmet_box = selected_det.box
+                elif rejected_with:
+                    # Candidate was rejected as a face mask or hat/cap!
+                    wh, reason = max(rejected_with, key=lambda pair: pair[0].confidence)
+                    selected_det = wh
+                    status = "WITHOUT_HELMET"
+                    rejection_note = reason
+                    conf = float(wh.confidence)
+                    helmet_box = wh.box
                 elif no_helmets:
+                    # Confirmed no-helmet detection
                     selected_det = max(no_helmets, key=lambda d: d.confidence)
+                    status = "WITHOUT_HELMET"
+                    conf = float(selected_det.confidence)
+                    helmet_box = selected_det.box
                 else:
-                    selected_det = max(with_helmets, key=lambda d: d.confidence)
+                    status = "UNKNOWN"
+                    conf = 0.0
+                    helmet_box = None
             else:
                 # Fallback: Targeted head crop inference
                 selected_det = self._crop_head_inference(frame, head_box)
-
-            rejection_note = None
-            if selected_det is not None:
-                is_no_helmet = "Without" in selected_det.label
-                status = "WITHOUT_HELMET" if is_no_helmet else "WITH_HELMET"
-                conf = float(selected_det.confidence)
-                helmet_box = selected_det.box
-
-                # Anatomical validation: Check if candidate helmet is actually a mask or hat
-                if status == "WITH_HELMET" and helmet_box is not None:
-                    is_valid, reason = self.validate_helmet_vs_mask_or_hat(
-                        r, helmet_box, selected_det.label
-                    )
-                    if not is_valid:
-                        # Reclassify to WITHOUT_HELMET (mask/hat is NOT a helmet)
+                if selected_det is not None:
+                    if self.is_helmet_label(selected_det.label):
+                        is_valid, reason = self.validate_helmet_vs_mask_or_hat(
+                            r, selected_det.box, selected_det.label, detected_masks
+                        )
+                        if is_valid:
+                            status = "WITH_HELMET"
+                            conf = float(selected_det.confidence)
+                            helmet_box = selected_det.box
+                        else:
+                            status = "WITHOUT_HELMET"
+                            rejection_note = reason
+                            conf = float(selected_det.confidence)
+                            helmet_box = selected_det.box
+                    else:
                         status = "WITHOUT_HELMET"
-                        rejection_note = reason
-                        conf = max(0.85, conf)
-            else:
-                status = "UNKNOWN"
-                conf = 0.0
-                helmet_box = None
+                        conf = float(selected_det.confidence)
+                        helmet_box = selected_det.box
+                else:
+                    status = "UNKNOWN"
+                    conf = 0.0
+                    helmet_box = None
 
             info = RiderHelmetInfo(
                 person=r,
