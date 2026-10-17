@@ -1,9 +1,13 @@
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import List, Tuple
 
 import cv2
 import numpy as np
+import streamlit as st
 
 import config
 from model_loader import load_detector
@@ -70,17 +74,15 @@ class StopLineService:
         confidence: float | None = None,
         detector_name: str | None = None,
         approach_side_sign: int | None = None,
+        approach_direction: str | None = "auto",
+        line_offset: int = 0,
     ):
-
         self.confidence = (
             confidence
             if confidence is not None
             else 0.25
         )
-
-
         self.small_object_confidence = 0.20
-
         self.detector_name = (
             detector_name
             if detector_name is not None
@@ -88,50 +90,57 @@ class StopLineService:
                 config.DEFAULT_DETECTOR
             ]
         )
-
         if approach_side_sign not in (None, -1, 1):
             raise ValueError(
                 "approach_side_sign must be -1, 1, or None."
             )
-
-
         self.approach_side_sign = approach_side_sign
+        self.approach_direction = approach_direction or "auto"
+        self.line_offset = line_offset
 
-       
         self.stop_line_detector = (
             AutomaticStopLineDetector()
         )
-
-   
         self.model = load_detector(
             self.detector_name
         )
-
-        
         self.traffic_signal_detector = (
             TrafficSignalDetector(detector=self.model)
         )
-
-
 
     def analyze(
         self,
         frame: np.ndarray,
     ) -> StopLineAnalysis:
-
         if frame is None or frame.size == 0:
-            raise ValueError(
-                "Input image is empty."
+            raise ValueError("Input image is empty.")
+
+        hint = self.approach_direction if self.approach_direction in ("top", "bottom", "left", "right") else None
+        if hint is None and self.approach_side_sign == 1:
+            hint = "bottom"
+        elif hint is None and self.approach_side_sign == -1:
+            hint = "top"
+
+        stop_line = self.stop_line_detector.detect(frame, approach_hint=hint)
+
+        # Apply fine-tuning offset if specified
+        if stop_line is not None and self.line_offset != 0:
+            dx = stop_line.p2[0] - stop_line.p1[0]
+            dy = stop_line.p2[1] - stop_line.p1[1]
+            length = max(1.0, float(np.hypot(dx, dy)))
+            nx = -dy / length
+            ny = dx / length
+            h_img, w_img = frame.shape[:2]
+            p1_sh = (
+                int(np.clip(stop_line.p1[0] + nx * self.line_offset, 0, w_img - 1)),
+                int(np.clip(stop_line.p1[1] + ny * self.line_offset, 0, h_img - 1)),
             )
-
-
-        stop_line = (
-            self.stop_line_detector.detect(
-                frame
+            p2_sh = (
+                int(np.clip(stop_line.p2[0] + nx * self.line_offset, 0, w_img - 1)),
+                int(np.clip(stop_line.p2[1] + ny * self.line_offset, 0, h_img - 1)),
             )
-        )
-
-
+            stop_line.p1 = p1_sh
+            stop_line.p2 = p2_sh
 
         traffic_signal = (
             self.traffic_signal_detector.detect(frame)
@@ -140,206 +149,76 @@ class StopLineService:
             else None
         )
 
-
-
-        vehicles = self._detect_vehicles(
-            frame
-        )
-
+        vehicles = self._detect_vehicles(frame)
         potential_violations = []
         violation_candidates = []
 
-
-
         if stop_line is not None:
-
-            relevant_vehicles = []
             image_height, image_width = frame.shape[:2]
-            line_length = float(
-                np.hypot(
-                    stop_line.p2[0] - stop_line.p1[0],
-                    stop_line.p2[1] - stop_line.p1[1],
-                )
-            )
+            line_dx = stop_line.p2[0] - stop_line.p1[0]
+            line_dy = stop_line.p2[1] - stop_line.p1[1]
+            line_length = float(np.hypot(line_dx, line_dy))
 
             if line_length == 0:
-                raise ValueError(
-                    "Detected stop line has zero length."
-                )
+                raise ValueError("Detected stop line has zero length.")
+
+            # Resolve approach direction
+            if self.approach_direction in ("top", "bottom", "left", "right"):
+                use_dir = self.approach_direction
+            elif self.approach_side_sign == 1:
+                use_dir = "bottom"
+            elif self.approach_side_sign == -1:
+                use_dir = "top"
+            else:
+                # Auto direction based on road geometry and vehicle clustering
+                if abs(line_dy) > abs(line_dx) * 1.5:
+                    mean_vx = np.mean([(v.box[0] + v.box[2]) / 2.0 for v in vehicles]) if vehicles else 0
+                    line_mid_x = (stop_line.p1[0] + stop_line.p2[0]) / 2.0
+                    use_dir = "left" if mean_vx < line_mid_x else "right"
+                else:
+                    mean_vy = np.mean([v.box[3] for v in vehicles]) if vehicles else 0
+                    line_mid_y = (stop_line.p1[1] + stop_line.p2[1]) / 2.0
+                    use_dir = "top" if mean_vy < line_mid_y else "bottom"
+
+            tau = max(10.0, min(image_height, image_width) * 0.015)
 
             for vehicle in vehicles:
+                bx1, by1, bx2, by2 = vehicle.box
+                cx, cy = vehicle.bottom_center
 
-                x1, y1, x2, y2 = vehicle.box
-                x_base, y_base = vehicle.bottom_center
+                if use_dir == "left":
+                    front_x = bx2
+                    ref_x = stop_line.p1[0] if line_dx == 0 else stop_line.p1[0] + (cy - stop_line.p1[1]) * line_dx / line_dy
+                    diff = front_x - ref_x
+                elif use_dir == "right":
+                    front_x = bx1
+                    ref_x = stop_line.p1[0] if line_dx == 0 else stop_line.p1[0] + (cy - stop_line.p1[1]) * line_dx / line_dy
+                    diff = ref_x - front_x
+                elif use_dir == "bottom":
+                    front_y = by1
+                    ref_y = stop_line.p1[1] if line_dx == 0 else stop_line.p1[1] + (cx - stop_line.p1[0]) * line_dy / line_dx
+                    diff = ref_y - front_y
+                else:  # "top"
+                    front_y = by2
+                    ref_y = stop_line.p1[1] if line_dx == 0 else stop_line.p1[1] + (cx - stop_line.p1[0]) * line_dy / line_dx
+                    diff = front_y - ref_y
 
-            
-                if y2 < int(image_height * 0.22):
-                    continue
+                vehicle.signed_distance = float(diff)
+                vehicle.reference_reliable = True
 
-                line_dx = stop_line.p2[0] - stop_line.p1[0]
-                line_dy = stop_line.p2[1] - stop_line.p1[1]
-
-   
-                contact_projection = (
-                    (x_base - stop_line.p1[0]) * line_dx
-                    + (y_base - stop_line.p1[1]) * line_dy
-                ) / (line_length * line_length)
-
-                vehicle_width = max(1, x2 - x1)
-                vehicle_height = max(1, y2 - y1)
-
-                base_distance = self._signed_line_distance(
-                    stop_line,
-                    x_base,
-                    y_base,
-                )
-                vehicle.signed_distance = base_distance
-
-           
-                distance_tolerance = min(
-                    image_height * 0.025,
-                    max(
-                        8.0,
-                        min(image_height, image_width) * 0.01,
-                        vehicle_height * 0.10,
-                    ),
-                )
-
-              
-                max_allowed_distance = image_height * 0.75
-                if abs(base_distance) > max_allowed_distance:
-                    continue
-
-               
-                mid_x = (x1 + x2) / 2.0
-                if self.approach_side_sign == 1:
-                    # Approaching upwards: front is lower y (y1), rear is higher y (y2)
-                    if vehicle.class_id in (3, 1):  # motorcycle, bicycle
-                        y_front = y1 + 0.35 * vehicle_height
-                        y_rear = float(y2)
-                        pts_front = [(mid_x, y_front)]
-                        pts_rear = [(mid_x, y_rear)]
-                    else:  # car, truck, bus
-                        eff_h = min(vehicle_height, vehicle_width * 1.0)
-                        y_front = y2 - eff_h * 0.70
-                        y_rear = float(y2)
-                        pts_front = [
-                            (x1 + 0.15 * vehicle_width, y_front),
-                            (mid_x, y_front),
-                            (x2 - 0.15 * vehicle_width, y_front),
-                        ]
-                        pts_rear = [
-                            (x1 + 0.15 * vehicle_width, y_rear),
-                            (mid_x, y_rear),
-                            (x2 - 0.15 * vehicle_width, y_rear),
-                        ]
-                    d_front_vals = [self._signed_line_distance(stop_line, px, py) for px, py in pts_front]
-                    d_rear_vals = [self._signed_line_distance(stop_line, px, py) for px, py in pts_rear]
-                    app_front = min(d_front_vals)
-                    app_base = max(d_rear_vals)
-                    app_mid = (app_front + app_base) / 2.0
-                elif self.approach_side_sign == -1:
-                    # Approaching downwards: front is higher y (y2), rear is lower y (y1)
-                    if vehicle.class_id in (3, 1):
-                        y_front = y2 - 0.35 * vehicle_height
-                        y_rear = float(y1)
-                        pts_front = [(mid_x, y_front)]
-                        pts_rear = [(mid_x, y_rear)]
-                    else:
-                        eff_h = min(vehicle_height, vehicle_width * 1.0)
-                        y_front = y1 + eff_h * 0.70
-                        y_rear = float(y1)
-                        pts_front = [
-                            (x1 + 0.15 * vehicle_width, y_front),
-                            (mid_x, y_front),
-                            (x2 - 0.15 * vehicle_width, y_front),
-                        ]
-                        pts_rear = [
-                            (x1 + 0.15 * vehicle_width, y_rear),
-                            (mid_x, y_rear),
-                            (x2 - 0.15 * vehicle_width, y_rear),
-                        ]
-                    d_front_vals = [-self._signed_line_distance(stop_line, px, py) for px, py in pts_front]
-                    d_rear_vals = [-self._signed_line_distance(stop_line, px, py) for px, py in pts_rear]
-                    app_front = min(d_front_vals)
-                    app_base = max(d_rear_vals)
-                    app_mid = (app_front + app_base) / 2.0
-                else:
-                    app_base = base_distance
-                    app_front = base_distance
-                    app_mid = base_distance
-
-                
-                if app_base < -distance_tolerance:
-                    departure_lat_margin = max(0.28, vehicle_width / line_length)
-                    if not (-departure_lat_margin <= contact_projection <= 1.0 + departure_lat_margin):
-                        continue
-                else:
-                    approach_lat_margin = max(0.65, vehicle_width / line_length)
-                    if not (-approach_lat_margin <= contact_projection <= 1.0 + approach_lat_margin):
-                        continue
-
-
-                is_clipped = (
-                    x1 <= 0
-                    or x2 >= image_width - 1
-                    or y2 >= image_height - 1
-                )
-                if is_clipped and abs(base_distance) <= image_height * 0.15:
-                    vehicle.reference_reliable = False
-                else:
-                    vehicle.reference_reliable = True
-
-              
-                if not vehicle.reference_reliable:
-                    vehicle.position = "REFERENCE_UNCERTAIN"
-                    relevant_vehicles.append(vehicle)
-                    continue
-
-                if self.approach_side_sign is None:
-                    
-                    if self._segment_intersects_box(stop_line, vehicle.box) and not (0.0 <= contact_projection <= 1.0):
-                        vehicle.position = "SEGMENT_UNCERTAIN"
-                    else:
-                        vehicle.position = self._position_for_distance(
-                            base_distance,
-                            distance_tolerance,
-                            None,
-                        )
-                else:
-                    tau = distance_tolerance
-                    if app_front < -tau:
-                        # Reliable leading ground contact has crossed to the departure side
-                        vehicle.position = "BEYOND_LINE"
-                    elif abs(app_front) <= tau or abs(app_base) <= tau or abs(app_mid) <= tau:
-                        # Vehicle contact is at/on the stop line zone within tolerance
-                        vehicle.position = "AT_LINE"
-                    elif app_front > tau and app_base > tau:
-                        # Both leading and trailing contacts are on the approach side
-                        vehicle.position = "BEFORE_LINE"
-                    else:
-                        vehicle.position = self._position_for_distance(
-                            base_distance,
-                            distance_tolerance,
-                            self.approach_side_sign,
-                        )
-
-                if vehicle.position == "BEYOND_LINE":
+                if diff > tau:
+                    vehicle.position = "BEYOND_LINE"
                     potential_violations.append(vehicle)
-                    if (
-                        traffic_signal is not None
-                        and traffic_signal.state == "RED"
-                        and self.approach_side_sign in (-1, 1)
-                        and vehicle.reference_reliable
-                    ):
+                    if traffic_signal is not None and traffic_signal.state == "RED":
+                        vehicle.confirmed_red_light_violation = True
                         vehicle.is_violation_candidate = True
                         violation_candidates.append(vehicle)
+                elif abs(diff) <= tau:
+                    vehicle.position = "AT_LINE"
+                else:
+                    vehicle.position = "BEFORE_LINE"
 
-                relevant_vehicles.append(vehicle)
-
-            vehicles = relevant_vehicles
-
-        if traffic_signal is None:
+        if traffic_signal is None or traffic_signal.state != "RED":
             violation_candidates = list(potential_violations)
 
         return StopLineAnalysis(
@@ -587,8 +466,14 @@ class StopLineService:
                     boxes.cls[index].item()
                 )
 
-                if class_id not in VEHICLE_CLASSES:
+                class_name = getattr(self.model, "names", {}).get(class_id, "").lower()
+                is_vehicle = class_id in VEHICLE_CLASSES or any(
+                    v in class_name for v in ("car", "motorcycle", "bus", "truck", "vehicle")
+                )
+                if not is_vehicle:
                     continue
+
+                vehicle_name = VEHICLE_CLASSES.get(class_id, class_name or "vehicle")
 
                 confidence = float(
                     boxes.conf[index].item()
@@ -649,9 +534,7 @@ class StopLineService:
                 vehicles.append(
                     VehicleObservation(
                         class_id=class_id,
-                        name=VEHICLE_CLASSES[
-                            class_id
-                        ],
+                        name=vehicle_name,
                         confidence=confidence,
                         box=(
                             x1,
@@ -1298,52 +1181,21 @@ def draw_stop_line_analysis(
             and vehicle.position == "BEYOND_LINE"
         )
 
-        if confirmed_violation:
-            box_color = (0, 0, 255)
-            display_id = (
-                vehicle.track_id
-                if vehicle.track_id is not None
-                else index
-            )
-            label = (
-                "RED-LIGHT VIOLATION | "
-                f"ID {display_id} {vehicle.name}"
-            )
-        elif is_candidate_violation:
-            box_color = (0, 0, 255)
-            display_id = (
-                vehicle.track_id
-                if vehicle.track_id is not None
-                else index
-            )
-            label = (
-                f"{display_id}: {vehicle.name} {vehicle.confidence:.2f}"
-                " | RED-LIGHT CANDIDATE"
-            )
-        elif (
-            vehicle.position in (
-                "AT_LINE",
-                "REFERENCE_UNCERTAIN",
-                "SEGMENT_UNCERTAIN",
-            )
-            or not vehicle.reference_reliable
-        ):
-            box_color = (0, 165, 255)
-            label = (
-                f"{index}: {vehicle.name} {vehicle.confidence:.2f}"
-                f" | {vehicle.position}"
-            )
+        if vehicle.position == "BEYOND_LINE":
+            box_color = (0, 0, 255)  # Red for ahead/crossed
+            if vehicle.confirmed_red_light_violation:
+                label = f"🚨 RED-LIGHT VIOLATION | {vehicle.name} {vehicle.confidence:.0%}"
+            else:
+                label = f"🚨 AHEAD OF LINE | {vehicle.name} {vehicle.confidence:.0%}"
+        elif vehicle.position == "AT_LINE":
+            box_color = (0, 165, 255)  # Amber/Orange for at line
+            label = f"⏸️ AT STOP LINE | {vehicle.name} {vehicle.confidence:.0%}"
         else:
-            box_color = (255, 0, 0)
-            label = (
-                f"{index}: {vehicle.name} {vehicle.confidence:.2f}"
-                f" | {vehicle.position}"
-            )
+            box_color = (0, 200, 0)  # Green for behind/safe
+            label = f"✅ BEHIND LINE | {vehicle.name} {vehicle.confidence:.0%}"
 
         if vehicle.signed_distance is not None:
-            label += f" d={vehicle.signed_distance:.1f}px"
-            if not vehicle.reference_reliable:
-                label += "*"
+            label += f" ({vehicle.signed_distance:+.0f}px)"
 
         label_data.append((label, vehicle.box))
         vehicle_colors.append(box_color)
@@ -1404,7 +1256,7 @@ def draw_stop_line_analysis(
             result,
             (cx, cy),
             7,
-            (0, 0, 255),
+            box_color,
             -1,
         )
 
@@ -1459,3 +1311,391 @@ def draw_stop_line_analysis(
     )
 
     return result
+
+
+def render_image(
+    confidence: float,
+    detector_name: str,
+):
+    st.header("🛑 Red Light & Stop-Line Violation Detection")
+    st.caption("Detects painted stop lines on the road, evaluates traffic signal states, and determines whether vehicles cross or stop safely before the line.")
+
+    source = st.radio(
+        "Select Image Input Source",
+        ["Upload Road Image", "Choose Sample Road Image"],
+        horizontal=True,
+    )
+
+    frame = None
+    image_name = "image.jpg"
+
+    if source == "Upload Road Image":
+        uploaded = st.file_uploader(
+            "Upload an image containing road traffic and stop line",
+            type=[x.lstrip(".") for x in config.IMAGE_EXTENSIONS],
+        )
+        if uploaded is not None:
+            buf = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
+            frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            image_name = uploaded.name
+    else:
+        sample_images = [
+            p for p in Path("images").iterdir()
+            if p.suffix.lower() in config.IMAGE_EXTENSIONS
+        ]
+        if not sample_images:
+            st.info("No sample images found in images/ directory.")
+            return
+
+        selected_sample = st.selectbox(
+            "Choose a sample road image",
+            sample_images,
+            format_func=lambda p: p.name,
+        )
+        if selected_sample:
+            frame = cv2.imread(str(selected_sample))
+            image_name = selected_sample.name
+
+    if frame is None:
+        return
+
+    with st.expander("⚙️ Stop-Line & Zebra-Crossing Controls", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            approach_opt = st.selectbox(
+                "Vehicle Approach Direction",
+                [
+                    "Auto-Detect from Scene (Recommended)",
+                    "Traffic Moving Downward (Top to Bottom)",
+                    "Traffic Moving Upward (Bottom to Top)",
+                    "Traffic Moving Rightward (Left to Right)",
+                    "Traffic Moving Leftward (Right to Left)",
+                ],
+            )
+            if "Downward" in approach_opt:
+                app_dir = "top"
+            elif "Upward" in approach_opt:
+                app_dir = "bottom"
+            elif "Rightward" in approach_opt:
+                app_dir = "left"
+            elif "Leftward" in approach_opt:
+                app_dir = "right"
+            else:
+                app_dir = "auto"
+        with c2:
+            signal_override = st.selectbox(
+                "Traffic Signal Phase",
+                [
+                    "Auto-Detect from Scene",
+                    "Enforce RED Signal (Active Red-Light Check)",
+                    "Enforce GREEN Signal (Pass Allowed)",
+                    "Enforce YELLOW Signal (Caution)",
+                ],
+            )
+        with c3:
+            line_offset = st.slider(
+                "Stop-Line Fine-Tuning (pixels)",
+                min_value=-150,
+                max_value=150,
+                value=0,
+                step=5,
+                help="Nudge the detected zebra crossing stop line forward or backward for precise alignment on any road camera.",
+            )
+
+    with st.spinner("Analyzing stop line, traffic signal, and vehicle positions..."):
+        service = StopLineService(
+            confidence=confidence,
+            detector_name=detector_name,
+            approach_direction=app_dir,
+            line_offset=line_offset,
+        )
+        analysis = service.analyze(frame)
+
+        if "RED" in signal_override:
+            analysis.traffic_signal = TrafficSignal(state="RED", confidence=1.0, reason="Manual Red Phase Override")
+            analysis.violation_candidates = [v for v in analysis.vehicles if v.position == "BEYOND_LINE" and v.reference_reliable]
+            for v in analysis.vehicles:
+                if v.position == "BEYOND_LINE":
+                    v.confirmed_red_light_violation = True
+        elif "GREEN" in signal_override:
+            analysis.traffic_signal = TrafficSignal(state="GREEN", confidence=1.0, reason="Manual Green Phase Override")
+            analysis.violation_candidates = []
+            for v in analysis.vehicles:
+                v.confirmed_red_light_violation = False
+        elif "YELLOW" in signal_override:
+            analysis.traffic_signal = TrafficSignal(state="YELLOW", confidence=1.0, reason="Manual Yellow Phase Override")
+            analysis.violation_candidates = []
+            for v in analysis.vehicles:
+                v.confirmed_red_light_violation = False
+
+        annotated = draw_stop_line_analysis(frame, analysis)
+
+    st.markdown("### 📷 Visual Comparison: Original vs. AI Detection")
+    view_mode = st.radio(
+        "View Mode",
+        ["Side-by-Side Comparison", "Detected Image (Full Width)", "Original Image (Full Width)"],
+        horizontal=True,
+    )
+
+    orig_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    annot_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+
+    if view_mode == "Side-by-Side Comparison":
+        col_orig, col_det = st.columns(2)
+        with col_orig:
+            st.markdown("##### 📸 Original Real Image")
+            st.image(orig_rgb, use_container_width=True)
+        with col_det:
+            st.markdown("##### 🔍 AI Detected Image (With Zebra Stop Line & Vehicle Positions)")
+            st.image(annot_rgb, use_container_width=True)
+    elif view_mode == "Detected Image (Full Width)":
+        st.image(annot_rgb, caption=f"Detection: {image_name}", use_container_width=True)
+    else:
+        st.image(orig_rgb, caption=f"Original: {image_name}", use_container_width=True)
+
+    total_vehicles = len(analysis.vehicles)
+    ahead_vehicles = [v for v in analysis.vehicles if v.position == "BEYOND_LINE"]
+    behind_vehicles = [v for v in analysis.vehicles if v.position == "BEFORE_LINE"]
+    at_line_vehicles = [v for v in analysis.vehicles if v.position == "AT_LINE"]
+    sig_state = analysis.traffic_signal.state if analysis.traffic_signal else "UNKNOWN"
+
+    st.markdown("---")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Traffic Signal", sig_state)
+    m2.metric("🚨 Ahead of Stop Line", len(ahead_vehicles))
+    m3.metric("✅ Behind Stop Line", len(behind_vehicles))
+    m4.metric("⏸️ At Stop Line", len(at_line_vehicles))
+    m5.metric("🚗 Total Vehicles", total_vehicles)
+
+    st.markdown("---")
+    st.subheader("📊 Comparison & Violation Summary")
+    st.info(
+        f"**Vehicle Comparison**: **{len(ahead_vehicles)} vehicle(s) ahead of the stop line** vs. "
+        f"**{len(behind_vehicles)} vehicle(s) safely behind the stop line** (Total monitored: {total_vehicles})."
+    )
+
+    if sig_state == "RED":
+        if ahead_vehicles:
+            st.error(f"🚨 **RED LIGHT VIOLATIONS DETECTED**: Found **{len(ahead_vehicles)} vehicle(s)** that crossed past the stop line into the crosswalk during a RED signal!")
+        else:
+            st.success("✅ **ALL VEHICLES COMPLIANT**: All waiting vehicles are safely behind the zebra crossing stop line during RED signal.")
+    elif sig_state == "GREEN":
+        st.success("🟢 **SIGNAL IS GREEN**: Vehicles are permitted to proceed across the stop line.")
+    else:
+        st.info(f"Stop-line monitoring active: {len(ahead_vehicles)} vehicle(s) ahead of line, {len(behind_vehicles)} vehicle(s) behind line.")
+
+    if analysis.vehicles:
+        st.markdown("#### 📋 Vehicle Position & Violation Breakdown")
+        table_rows = []
+        for idx, v in enumerate(analysis.vehicles, 1):
+            dist_str = f"{v.signed_distance:+.1f} px" if v.signed_distance is not None else "N/A"
+            if v.position == "BEYOND_LINE":
+                if sig_state == "RED":
+                    status_badge = "🚨 RED LIGHT VIOLATION (Crossed)"
+                else:
+                    status_badge = "⚠️ AHEAD OF STOP LINE (Crossed)"
+            elif v.position == "BEFORE_LINE":
+                status_badge = "✅ COMPLIANT (Behind Line)"
+            elif v.position == "AT_LINE":
+                status_badge = "⏸️ AT STOP LINE (Waiting)"
+            else:
+                status_badge = f"ℹ️ {v.position}"
+
+            table_rows.append({
+                "Vehicle #": idx,
+                "Type": v.name.title(),
+                "Confidence": f"{v.confidence:.0%}",
+                "Position": v.position,
+                "Distance to Line": dist_str,
+                "Status": status_badge,
+            })
+        st.dataframe(table_rows, use_container_width=True)
+
+    _, encoded_img = cv2.imencode(".jpg", annotated)
+    st.download_button(
+        "📥 Download Annotated Stop-Line Image",
+        encoded_img.tobytes(),
+        file_name=f"stop_line_analysis_{image_name}",
+        mime="image/jpeg",
+    )
+
+
+def render_video(
+    confidence: float,
+    detector_name: str,
+):
+    st.header("🛑 Red Light & Stop-Line Detection — Video Inference")
+    st.caption("Tracks moving vehicles across video frames and identifies red-light stop-line crossings in real time.")
+
+    video_source = st.radio(
+        "Select Video Input Source",
+        ["Upload Road Video", "Choose Sample Road Video"],
+        horizontal=True,
+    )
+
+    input_path = None
+
+    if video_source == "Upload Road Video":
+        uploaded = st.file_uploader(
+            "Upload a road video",
+            type=[x.lstrip(".") for x in config.VIDEO_EXTENSIONS],
+        )
+        if uploaded is not None:
+            if uploaded.size < 1000:
+                st.warning("Uploaded file is too small or an empty placeholder. Please select a valid video.")
+                return
+            input_path = config.VIDEOS_DIR / uploaded.name
+            input_path.write_bytes(uploaded.getbuffer())
+    else:
+        sample_videos = sorted(
+            [p for p in config.VIDEOS_DIR.iterdir() if p.suffix.lower() in config.VIDEO_EXTENSIONS and p.stat().st_size > 10000],
+            key=lambda p: p.name,
+        )
+        if not sample_videos:
+            st.info("No sample videos found in videos/.")
+            return
+        selected = st.selectbox("Choose a sample video", sample_videos, format_func=lambda p: f"{p.name} ({p.stat().st_size / (1024*1024):.1f} MB)")
+        if selected:
+            input_path = selected
+
+    if not input_path:
+        return
+
+    st.video(str(input_path))
+
+    with st.expander("⚙️ Stop-Line Detection Controls", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            approach_opt = st.selectbox(
+                "Vehicle Approach Direction",
+                [
+                    "Approaching Upward (Bottom to Top - Standard)",
+                    "Approaching Downward (Top to Bottom)",
+                    "Automatic / Unconstrained",
+                ],
+                key="video_approach_opt",
+            )
+            approach_sign = 1 if "Bottom to Top" in approach_opt else (-1 if "Top to Bottom" in approach_opt else None)
+        with c2:
+            signal_override = st.selectbox(
+                "Traffic Signal Phase",
+                [
+                    "Auto-Detect from Scene",
+                    "Enforce RED Signal (Active Red-Light Check)",
+                    "Enforce GREEN Signal (Pass Allowed)",
+                    "Enforce YELLOW Signal (Caution)",
+                ],
+                key="video_signal_override",
+            )
+
+    if not st.button("Run Stop-Line Video Detection", type="primary"):
+        return
+
+    cap = cv2.VideoCapture(str(input_path))
+    if not cap.isOpened():
+        st.error("Could not open the selected video.")
+        return
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1280)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 1)
+
+    raw_output_path = config.OUTPUTS_DIR / f"{input_path.stem}_stop_line_raw.mp4"
+    output_path = config.OUTPUTS_DIR / f"{input_path.stem}_stop_line_result.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(raw_output_path), fourcc, fps, (width, height))
+
+    service = StopLineService(
+        confidence=confidence,
+        detector_name=detector_name,
+        approach_side_sign=approach_sign,
+    )
+
+    frame_slot = st.empty()
+    progress = st.progress(0.0)
+    status_text = st.empty()
+
+    frame_idx = 0
+    unique_crossed = set()
+    unique_stopped = set()
+
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+
+            analysis = service.analyze(frame)
+
+            if "RED" in signal_override:
+                analysis.traffic_signal = TrafficSignal(state="RED", confidence=1.0, reason="Manual Red Phase Override")
+                analysis.violation_candidates = [v for v in analysis.vehicles if v.position == "BEYOND_LINE" and v.reference_reliable]
+            elif "GREEN" in signal_override:
+                analysis.traffic_signal = TrafficSignal(state="GREEN", confidence=1.0, reason="Manual Green Phase Override")
+                analysis.violation_candidates = []
+            elif "YELLOW" in signal_override:
+                analysis.traffic_signal = TrafficSignal(state="YELLOW", confidence=1.0, reason="Manual Yellow Phase Override")
+                analysis.violation_candidates = []
+
+            annotated = draw_stop_line_analysis(frame, analysis)
+            writer.write(annotated)
+
+            for v in analysis.vehicles:
+                t_id = v.track_id if v.track_id is not None else f"{v.name}_{v.box[0]}"
+                if v.position == "BEYOND_LINE":
+                    unique_crossed.add(t_id)
+                elif v.position in ("BEFORE_LINE", "AT_LINE"):
+                    unique_stopped.add(t_id)
+
+            frame_slot.image(
+                cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
+                channels="RGB",
+                use_container_width=True,
+            )
+            progress.progress(min(1.0, (frame_idx + 1) / total))
+            stopped_compliant = len(unique_stopped - unique_crossed)
+            status_text.text(f"Processed frame {frame_idx + 1}/{total} | Crossed: {len(unique_crossed)} | Stopped: {stopped_compliant}")
+            frame_idx += 1
+    finally:
+        cap.release()
+        writer.release()
+        progress.progress(1.0)
+
+    # Convert to browser-compatible H264 if ffmpeg is available
+    display_video_path = raw_output_path
+    if shutil.which("ffmpeg"):
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(raw_output_path),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "veryfast",
+            str(output_path),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            display_video_path = output_path
+
+    st.success(f"Processing complete! Analyzed {frame_idx} frames.")
+    stopped_compliant_count = len(unique_stopped - unique_crossed)
+    total_vehicles_count = len(unique_crossed | unique_stopped)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🚨 Crossed Stop Line", len(unique_crossed))
+    c2.metric("✅ Stopped Safely Before Line", stopped_compliant_count)
+    c3.metric("🚗 Total Unique Vehicles", total_vehicles_count)
+
+    st.video(str(display_video_path))
+    with open(display_video_path, "rb") as vf:
+        st.download_button(
+            "📥 Download Annotated Stop-Line Video",
+            vf.read(),
+            file_name=f"{input_path.stem}_stop_line_result.mp4",
+            mime="video/mp4",
+        )
