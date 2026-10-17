@@ -6,6 +6,7 @@ import video_service
 import helmet_service
 import combined_service
 import wrong_way_service
+import stop_line_service
 
 
 st.set_page_config(
@@ -126,6 +127,13 @@ with st.sidebar:
             "and checks movement against the allowed direction."
         )
 
+    elif task == config.TASK_STOP_LINE:
+
+        st.caption(
+            "Stop-Line: Detects vehicles crossing the stop line "
+            "during a red traffic signal."
+        )
+
 
 # ============================================================
 # TRIPLE RIDING
@@ -241,63 +249,120 @@ elif task == config.TASK_COMBINED:
 elif task == config.TASK_WRONG_WAY:
 
     st.info(
-        "Upload a road video. RoadIQ tracks vehicles and "
+        "Upload a road video or choose a sample video. RoadIQ tracks vehicles and "
         "checks whether they move against the allowed direction."
     )
 
-    uploaded = st.file_uploader(
-        "Upload road video",
-        type=[
-            x.lstrip(".")
-            for x in config.VIDEO_EXTENSIONS
-        ],
+    video_source = st.radio(
+        "Select Video Input Source",
+        ["Upload Road Video", "Choose Sample Road Video"],
+        horizontal=True,
     )
 
-    if uploaded:
+    video_path = None
 
-        os.makedirs(
-            str(config.OUTPUTS_DIR),
-            exist_ok=True,
+    if video_source == "Upload Road Video":
+        uploaded = st.file_uploader(
+            "Upload road video",
+            type=[
+                x.lstrip(".")
+                for x in config.VIDEO_EXTENSIONS
+            ],
         )
 
-        video_path = (
-            config.OUTPUTS_DIR
-            / "wrong_way_input_video.mp4"
-        )
-
-        with open(video_path, "wb") as f:
-            f.write(uploaded.getbuffer())
-
-        st.video(str(video_path))
-
-        if st.button(
-            "Run Wrong-Way Detection",
-            type="primary",
-        ):
-
-            model_path = config.DETECTOR_MODELS[
-                detector_name
-            ]
-
-            result = wrong_way_service.render_video(
-                confidence=confidence,
-                model_path=model_path,
-                video_path=str(video_path),
-            )
-
-            if result:
-
-                st.success(
-                    "Wrong-way detection completed."
+        if uploaded:
+            if uploaded.size < 1000:
+                st.warning(
+                    "⚠️ The uploaded file is smaller than 1 KB and appears to be a Git LFS pointer file or empty placeholder. "
+                    "Please upload a valid MP4 video."
+                )
+            else:
+                os.makedirs(
+                    str(config.OUTPUTS_DIR),
+                    exist_ok=True,
                 )
 
-                st.video(result)
+                video_path = (
+                    config.OUTPUTS_DIR
+                    / "wrong_way_input_video.mp4"
+                )
 
-                with open(result, "rb") as video_file:
+                with open(video_path, "wb") as f:
+                    f.write(uploaded.getbuffer())
 
-                    st.download_button(
-                        "Download Wrong-Way Video",
-                        video_file,
-                        file_name="wrong_way_result.mp4",
-                        mime="video/mp4",
-                    )
+                st.video(str(video_path))
+    else:
+        # Filter stored videos with actual content (> 10 KB)
+        sample_videos = sorted(
+            [
+                p
+                for p in config.VIDEOS_DIR.iterdir()
+                if p.suffix.lower() in config.VIDEO_EXTENSIONS and p.stat().st_size > 10000
+            ],
+            key=lambda p: p.name,
+        )
+
+        if not sample_videos:
+            st.info("No stored sample videos found in videos/.")
+        else:
+            selected_video = st.selectbox(
+                "Choose a sample road video",
+                sample_videos,
+                format_func=lambda p: f"{p.name} ({p.stat().st_size / (1024*1024):.1f} MB)",
+            )
+            if selected_video:
+                video_path = selected_video
+                st.video(str(video_path))
+
+    if video_path and st.button(
+        "Run Wrong-Way Detection",
+        type="primary",
+    ):
+
+        model_path = config.DETECTOR_MODELS[
+            detector_name
+        ]
+
+        result = wrong_way_service.render_video(
+            confidence=confidence,
+            model_path=model_path,
+            video_path=str(video_path),
+        )
+
+        if result:
+
+            st.success(
+                "Wrong-way detection completed."
+            )
+
+            st.video(result)
+
+            with open(result, "rb") as video_file:
+
+                st.download_button(
+                    "Download Wrong-Way Video",
+                    video_file,
+                    file_name="wrong_way_result.mp4",
+                    mime="video/mp4",
+                )
+
+
+# ============================================================
+# STOP LINE / RED LIGHT VIOLATION
+# ============================================================
+
+elif task == config.TASK_STOP_LINE:
+
+    if mode == config.MODE_IMAGE:
+
+        stop_line_service.render_image(
+            confidence=confidence,
+            detector_name=config.DETECTOR_MODELS[detector_name],
+        )
+
+    else:
+
+        stop_line_service.render_video(
+            confidence=confidence,
+            detector_name=config.DETECTOR_MODELS[detector_name],
+        )
