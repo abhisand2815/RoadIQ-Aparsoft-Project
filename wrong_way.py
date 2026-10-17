@@ -27,6 +27,11 @@ class WrongWayDetector:
         opposite_angle=135,
         tracker="bytetrack.yaml",
     ):
+        try:
+            import config
+            model_path = config.resolve_model_path(model_path)
+        except Exception:
+            pass
         self.model = YOLO(model_path)
 
         self.conf = conf
@@ -119,7 +124,7 @@ class WrongWayDetector:
 
     def learn_flow(self):
 
-        if len(self.flow_samples) < 10:
+        if len(self.flow_samples) < 4:
             return
 
         directions = []
@@ -265,8 +270,10 @@ class WrongWayDetector:
 
             if (
                 not self.flow_ready
-                and self.frame_index
-                >= self.warmup_frames
+                and (
+                    self.frame_index >= self.warmup_frames
+                    or len(self.flow_samples) >= 6
+                )
             ):
                 self.learn_flow()
 
@@ -275,8 +282,6 @@ class WrongWayDetector:
             if (
                 move is not None
                 and self.flow_ready
-                and self.frame_index
-                > self.warmup_frames
             ):
                 wrong = self.is_wrong_way(
                     move
@@ -418,15 +423,33 @@ def process_video(
     if os.path.exists(out_path):
         os.remove(out_path)
 
-    # mp4v FOURCC integer.
-    fourcc = 1983148141
+    if width <= 0 or height <= 0:
+        cap.release()
+        return None
 
-    writer = cv2.VideoWriter(
-        raw_path,
-        fourcc,
-        fps,
-        (width, height)
-    )
+    writer = None
+    for codec in ["avc1", "mp4v"]:
+        try:
+            w = cv2.VideoWriter(
+                raw_path,
+                cv2.VideoWriter_fourcc(*codec),
+                fps,
+                (width, height),
+            )
+            if w.isOpened():
+                writer = w
+                break
+        except Exception:
+            pass
+
+    if writer is None or not writer.isOpened():
+        fourcc = 1983148141
+        writer = cv2.VideoWriter(
+            raw_path,
+            fourcc,
+            fps,
+            (width, height)
+        )
 
     if not writer.isOpened():
         cap.release()
@@ -461,6 +484,14 @@ def process_video(
 
     cap.release()
     writer.release()
+
+    if count == 0:
+        if os.path.exists(raw_path):
+            try:
+                os.remove(raw_path)
+            except Exception:
+                pass
+        return None
 
     if not os.path.exists(raw_path):
         return None
