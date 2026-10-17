@@ -1,5 +1,3 @@
-
-
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import cv2
@@ -30,10 +28,10 @@ class TrafficSignalDetector:
         confidence: float = 0.15,
     ):
         self.confidence = confidence
-        if detector is not None:
+        if detector is not None and hasattr(detector, "names") and any("traffic light" in str(v).lower() for v in detector.names.values()):
             self.model = detector
         else:
-            self.model = load_detector(detector_name or "yolo26n.pt")
+            self.model = load_detector(detector_name or "yolo11n.pt")
 
     def detect(self, frame: np.ndarray) -> TrafficSignal:
 
@@ -47,7 +45,6 @@ class TrafficSignalDetector:
 
         height, width = frame.shape[:2]
 
-        
         results = self.model.predict(
             frame,
             conf=self.confidence,
@@ -60,7 +57,8 @@ class TrafficSignalDetector:
                 continue
             for index in range(len(result.boxes)):
                 class_id = int(result.boxes.cls[index].item())
-                if class_id != 9:  # COCO class 9: traffic light
+                cls_name = getattr(self.model, "names", {}).get(class_id, "").lower()
+                if "traffic light" not in cls_name and (class_id != 9 or "vehicle" in cls_name):
                     continue
 
                 conf = float(result.boxes.conf[index].item())
