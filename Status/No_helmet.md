@@ -40,52 +40,52 @@ No false violations were raised on any of the four frames with helmeted riders (
 ## Per-image detail
 
 ### Test 1
-![Test 1](test01.png)
+![Test 1](No_Helmet/test01.png)
 
 Hazy street scene with a small, distant rider in the center. Detected as `BIKE 5 | NO-HELMET VIOLATION (1/1 without helmet)` with `RIDER (Driver) #0 | NO HELMET - Hat / Cap detected (ears & face exposed below brim) (41%)`. Counters: `Motorcycles 2, Riders 1, Pillions 0, No Helmet Violations 1, Helmets Compliant 0, Pedestrians 1`. The rider is small and low resolution, so the result is plausible but needs a manual check. A second motorcycle at the right (`BIKE 8`) is labeled `PARKED / NO RIDER` although a person appears to be on it, a possible missed rider. The `BIKE 5` label partly overlaps another box and is clipped.
 
 ### Test 2
-![Test 2](test02.png)
+![Test 2](No_Helmet/test02.png)
 
 Three motorcycles with one rider each: left rider (yellow shirt) and right rider (dark shirt, white scooter) are bareheaded, middle rider wears a grey helmet. Detected: `RIDER (Driver) #2 | NO HELMET VIOLATION (81%)`, `RIDER (Driver) #1 | NO HELMET VIOLATION`, `RIDER (Driver) #0 | HEAD OCCLUDED`, `BIKE 5 | RIDERS: 1 | HELMETS OK`, `BIKE 1 | NO-HELMET VIOLATION (1/1 without helmet)`. Counters: `Motorcycles 3, Riders 3, Pillions 0, No Helmet Violations 2, Helmets Compliant 0, Pedestrians 0`. Both violations are correct, but the helmeted middle rider is not counted as compliant, and a second person seated behind the right-hand rider appears to be unevaluated. Labels for `BIKE 5` and `RIDER #0` overlap and are partly unreadable (`HE.METS OK`, `O CLUD ED`), and the right-most label is clipped at the frame edge.
 
 ### Test 3
-![Test 3](test03.png)
+![Test 3](No_Helmet/test03.png)
 
 Motion-blurred shot of two people on one motorcycle, both wearing dark helmets. Detected as `BIKE 1 | RIDERS: 1 | HELMETS OK` with `RIDER (Driver) #0 | HEAD OCCLUDED`. The second occupant is drawn as a faint `PERSON | NOT ASSOCIATED` label and counted under `Pedestrians (Ignored) 1`. Counters: `Motorcycles 1, Riders 1, Pillions 0, No Helmet Violations 0, Helmets Compliant 0, Pedestrians 1`. No false violation, but the pillion is missed and the helmeted rider is not counted as compliant.
 
 ### Test 4
-![Test 4](test04.png)
+![Test 4](No_Helmet/test04.png)
 
 Three men on one motorcycle, all wearing face masks and no helmets. Detected as `BIKE 1 | NO-HELMET VIOLATION (3/3 without helmet)` with `RIDER (Driver) #0` and `PERSON (Sitting Behind) #2 | NO HELMET VIOLATION`. Counters: `Motorcycles 1, Riders 1, Pillions 2, No Helmet Violations 3, Helmets Compliant 0, Pedestrians 0`. Correct. Rider/pillion labels stack on top of each other and are clipped at the right edge; `NO-HELMET VIOLATION` in the bike label renders with broken characters.
 
 ### Test 5
-![Test 5](test05.png)
+![Test 5](No_Helmet/test05.png)
 
 Three men on one motorcycle on a rural road, no helmets, slight motion blur. Detected as `BIKE 0 | NO-HELMET VIOLATION (3/3 without helmet)` with `RIDER (Driver) #2 | NO HELMET VIOLATION (73%)` and `PERSON (Sitting Behind) #1 | NO HELM...`. Counters: `Motorcycles 1, Riders 1, Pillions 2, No Helmet Violations 3, Helmets Compliant 0, Pedestrians 0`. Correct. The bike label text is garbled (`VIOLAT ION (3, 3 withou t helm et)`) and the pillion label is cut off at the frame edge.
 
 ### Test 6
-![Test 6](test06.png)
+![Test 6](No_Helmet/test06.png)
 
 Three people on one motorcycle (man in a blue cap in front, child in the middle, woman behind), none wearing helmets. Detected as `BIKE 0 | NO-HELMET VIOLATION (2/2 without helmet)` with `RIDER (Driver) #1 | NO HELMET - Hat / Cap detected (ears & face exposed below brim) (43%)`. Counters: `Motorcycles 1, Riders 1, Pillions 1, No Helmet Violations 2, Helmets Compliant 0, Pedestrians 0`. The driver's cap is correctly rejected as a helmet, but only 2 of the 3 occupants are evaluated, so the violation count is one short.
 
 ### Test 7
-![Test 7](test07.png)
+![Test 7](No_Helmet/test07.png)
 
 Two people on a sport touring motorcycle, both in full-face helmets and leather jackets. Detected as `BIKE 0 | RIDERS: 2 | HELMETS OK` with `RIDER (Driver) #0 | HEAD OCCLUDED` and `PERSON (Sitting Behind) #1 | HEAD OCCLUDED`. Counters: `Motorcycles 1, Riders 1, Pillions 1, No Helmet Violations 0, Helmets Compliant 0, Pedestrians 0`. Rider and pillion association is correct and no violation is raised, but both helmeted heads are tagged `HEAD OCCLUDED` and `Helmets Compliant` stays at 0.
 
 ### Test 8
-![Test 8](test08.png)
+![Test 8](No_Helmet/test08.png)
 
 Single rider on a naked roadster, full-face helmet, red jacket. Detected as `BIKE 0 | RIDERS: 1 | HELMETS OK` with `RIDER (Driver) #0 | HEAD OCCLUDED`. Counters: `Motorcycles 1, Riders 1, Pillions 0, No Helmet Violations 0, Helmets Compliant 0, Pedestrians 0`. Correct outcome (no violation), but the helmeted rider is not counted as compliant.
 
 ### Test 9
-![Test 9](test09.png)
+![Test 9](No_Helmet/test09.png)
 
 Same scene as Test 3, second capture. Same result: `BIKE 1 | RIDERS: 1 | HELMETS OK`, `RIDER (Driver) #0 | HEAD OCCLUDED`, second occupant as `PERSON | NOT ASSOCIATED`, `Pedestrians 1`, `Helmets Compliant 0`. Confirms the pillion miss and the compliant-counter bug are reproducible, not one-offs.
 
 ### Test 10
-![Test 10](test10.png)
+![Test 10](No_Helmet/test10.png)
 
 Dense traffic scene with five motorcycles and many masked, mostly bareheaded riders. Detected: `BIKE 1`, `BIKE 5`, `BIKE 8`, `BIKE 2` all with `NO-HELMET VIOLATION`, plus `RIDER (Driver) #2 | NO HELMET VIOLATION (84%)` and `RIDER (Driver) #4 | NO HELMET - Hat / Cap...`. Counters: `Motorcycles 5, Riders 4, Pillions 0, No Helmet Violations 4, Helmets Compliant 0, Pedestrians 3`. The violation count is plausible, but `Pedestrians 3` is suspect in a scene where nearly everyone visible is seated on a bike, so some riders or pillions are likely unassociated. Labels overlap heavily and are largely unreadable or clipped at the right edge, and one blue box at the right edge is cut off. Manual verification of the per-bike counts is needed.
 
