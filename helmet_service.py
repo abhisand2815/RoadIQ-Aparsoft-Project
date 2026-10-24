@@ -298,7 +298,14 @@ def render_video(
         str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
     )
 
-    frame_slot = st.empty()
+    original_col, result_col = st.columns(2)
+    with original_col:
+        st.markdown("#### Original video")
+        original_frame_slot = st.empty()
+    with result_col:
+        st.markdown("#### Live detection result")
+        result_frame_slot = st.empty()
+    status_slot = st.empty()
     progress = st.progress(0.0)
     frame_idx = 0
     total_violations_tracked = set()
@@ -319,13 +326,24 @@ def render_video(
             for vr in analysis.violating_riders:
                 total_violations_tracked.add((vr.bike_id, vr.person.track_id))
 
-            frame_slot.image(
+            # Update both panels from the same processed frame.
+            original_frame_slot.image(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                channels="RGB",
+                use_container_width=True,
+            )
+            result_frame_slot.image(
                 cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                 channels="RGB",
                 use_container_width=True,
             )
             if total:
                 progress.progress(min(1.0, (frame_idx + 1) / total))
+            status_slot.info(
+                f"Processing frame {frame_idx + 1}"
+                + (f" / {total}" if total else "")
+                + f" · Unique no-helmet rider tracks: {len(total_violations_tracked)}"
+            )
             frame_idx += 1
     finally:
         cap.release()

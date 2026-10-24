@@ -1612,7 +1612,13 @@ def render_video(
         approach_side_sign=approach_sign,
     )
 
-    frame_slot = st.empty()
+    original_col, result_col = st.columns(2)
+    with original_col:
+        st.markdown("#### Original video")
+        original_frame_slot = st.empty()
+    with result_col:
+        st.markdown("#### Live stop-line result")
+        result_frame_slot = st.empty()
     progress = st.progress(0.0)
     status_text = st.empty()
 
@@ -1648,14 +1654,23 @@ def render_video(
                 elif v.position in ("BEFORE_LINE", "AT_LINE"):
                     unique_stopped.add(t_id)
 
-            frame_slot.image(
+            original_frame_slot.image(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                channels="RGB",
+                use_container_width=True,
+            )
+            result_frame_slot.image(
                 cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                 channels="RGB",
                 use_container_width=True,
             )
             progress.progress(min(1.0, (frame_idx + 1) / total))
             stopped_compliant = len(unique_stopped - unique_crossed)
-            status_text.text(f"Processed frame {frame_idx + 1}/{total} | Crossed: {len(unique_crossed)} | Stopped: {stopped_compliant}")
+            status_text.text(
+                f"Processed frame {frame_idx + 1}/{total}"
+                f" | Crossed: {len(unique_crossed)}"
+                f" | Stopped safely: {stopped_compliant}"
+            )
             frame_idx += 1
     finally:
         cap.release()

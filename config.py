@@ -14,6 +14,22 @@ WEIGHTS_DIR = BASE_DIR / "weights"
 VIDEOS_DIR = BASE_DIR / "videos"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 EVIDENCE_DIR = BASE_DIR / "evidence"
+EVENT_LOG = OUTPUTS_DIR / "road_violations.json"
+OUTPUT_VIDEO = OUTPUTS_DIR / "road_violations_annotated.mp4"
+
+# MacBook M4 performance settings
+DEFAULT_IMAGE_SIZE = 480
+DEFAULT_CONFIDENCE = 0.35
+DEFAULT_IOU = 0.50
+
+# Use Apple Silicon GPU when available
+DEFAULT_DEVICE = "mps"
+
+# Video preview performance
+VIDEO_SKIP_FRAMES = 0
+LIVE_PREVIEW_EVERY_N_FRAMES = 3
+VIDEO_DISPLAY_WIDTH = 640
+VIDEO_DISPLAY_HEIGHT = 360
 
 for directory in (
     WEIGHTS_DIR,
@@ -50,6 +66,8 @@ TASK_COMBINED = "🚨 All Violations (Triple Riding + No Helmet)"
 TASK_WRONG_WAY = "🚫 Wrong-Way Detection"
 TASK_STOP_LINE = "🛑 Red Light & Stop-Line Detection"
 
+TASK_YOLOE = "YOLOE (text-prompted segmentation)"
+
 TASKS = [
     TASK_TRIPLE_RIDING,
     TASK_NO_HELMET,
@@ -60,61 +78,65 @@ TASKS = [
 
 
 # ============================================================
-# OBJECT DETECTION MODELS
+# YOLO26-ONLY MODEL CATALOG
+# The existing RoadIQ services consume DETECTOR_MODELS, POSE_MODELS,
+# and HELMET_MODELS. Keep these names stable for compatibility.
 # ============================================================
+
+_MODEL_SIZES = ("n", "s", "m", "l", "x")
 
 DETECTOR_MODELS = {
-    "YOLO11 Nano": "yolo11n.pt",
-    "YOLO11 Small": "yolo11s.pt",
-    "YOLO26 Nano": "yolo26n.pt",
-    "YOLO26 Small": "yolo26s.pt",
-    "YOLO26 Medium": "yolo26m.pt",
+    f"YOLO26 {size.upper()}" + (" — recommended" if size == "n" else ""): f"yolo26{size}.pt"
+    for size in _MODEL_SIZES
 }
-
-DEFAULT_DETECTOR = "YOLO11 Nano"
-
-
-# ============================================================
-# POSE MODELS
-# ============================================================
+DEFAULT_DETECTOR = "YOLO26 N — recommended"
 
 POSE_MODELS = {
-    "YOLO11 Pose Nano": "yolo11n-pose.pt",
-    "YOLO11 Pose Small": "yolo11s-pose.pt",
-    "YOLO26 Pose Nano": "yolo26n-pose.pt",
-    "YOLO26 Pose Small": "yolo26s-pose.pt",
+    f"YOLO26 Pose {size.upper()}": f"yolo26{size}-pose.pt"
+    for size in _MODEL_SIZES
 }
+DEFAULT_POSE = "YOLO26 Pose N"
 
-DEFAULT_POSE = "YOLO11 Pose Nano"
-
-
-# ============================================================
-# HELMET MODELS
-# ============================================================
-
+# Project-specific checkpoint; this is not a generic pretrained model.
 HELMET_MODELS = {
-    "YOLO26 Large PPE/Helmet (High Accuracy)": "ppe_yolo26l_96e.pt",
-    "YOLO11 Small Helmet (High Accuracy)": "helmet_yolo11s.pt",
-    "YOLOv8 Nano Helmet (Fast)": "helmet_yolov8n.pt",
+    "RoadIQ PPE YOLO26-L (custom)": "ppe_yolo26l_96e.pt",
 }
-
-DEFAULT_HELMET_MODEL = (
-    "YOLO26 Large PPE/Helmet (High Accuracy)"
-)
-
+DEFAULT_HELMET_MODEL = "RoadIQ PPE YOLO26-L (custom)"
 DEFAULT_HELMET_CONFIDENCE = 0.35
-
-
 HELMET_CLASS_WITH = 0
 HELMET_CLASS_WITHOUT = 1
 
+# Optional YOLO26 task catalogs. These do not automatically add inference
+# support to existing RoadIQ workflows; use only when the relevant task is
+# supported by the installed Ultralytics release.
+SEGMENTATION_MODELS = {
+    f"YOLO26 Segmentation {size.upper()}": f"yolo26{size}-seg.pt"
+    for size in _MODEL_SIZES
+}
+CLASSIFICATION_MODELS = {
+    f"YOLO26 Classification {size.upper()}": f"yolo26{size}-cls.pt"
+    for size in _MODEL_SIZES
+}
+ORIENTED_BOX_MODELS = {
+    f"YOLO26 OBB {size.upper()}": f"yolo26{size}-obb.pt"
+    for size in _MODEL_SIZES
+}
+
+# Defaults consumed by older model-loading helpers.
+DETECT_MODEL = "yolo26n.pt"
+FALLBACK_DETECT_MODEL = "yolo26n.pt"
+POSE_MODEL = "yolo26n-pose.pt"
+FALLBACK_POSE_MODEL = "yolo26n-pose.pt"
 
 # ============================================================
 # COCO CLASS IDs
 # ============================================================
-
+# COCO pretrained detection labels: person=0, motorcycle=3.
+# Both naming conventions are kept because existing modules use both.
 PERSON_CLASS = 0
+PERSON_CLASS_ID = PERSON_CLASS
 MOTORCYCLE_CLASS = 3
+MOTORCYCLE_CLASS_ID = MOTORCYCLE_CLASS
 
 
 # ============================================================
@@ -201,71 +223,48 @@ VIDEO_EXTENSIONS = [
 # ============================================================
 
 def use_local_weights_dir() -> None:
-    """Create the local weights directory if required."""
-
-    WEIGHTS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    """Create the project's local weights directory and prefer it in Ultralytics."""
+    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        from ultralytics.utils import SETTINGS
+        SETTINGS["weights_dir"] = str(WEIGHTS_DIR)
+    except (ImportError, KeyError, TypeError):
+        # Keep config importable even before optional ML dependencies are installed.
+        pass
 
 
 def resolve_model_path(model_name: str) -> str:
+    """Resolve an existing model path, preferring this project's ``weights/`` folder.
+
+    If the requested file is not present locally, return the model identifier so
+    Ultralytics can resolve an official checkpoint when the caller loads it.
     """
-    Use a local weight file when available.
+    candidate = Path(model_name).expanduser()
+    if candidate.is_absolute() and candidate.is_file():
+        return str(candidate.resolve())
+    if candidate.is_file():
+        return str(candidate.resolve())
 
-    Otherwise return the model name so that
-    Ultralytics can load/download the official model.
-    """
-    # 1. Direct path check
-    p = Path(model_name)
-    if p.exists():
-        return str(p.resolve())
+    local_path = WEIGHTS_DIR / candidate.name
+    if local_path.is_file():
+        return str(local_path.resolve())
 
-    # 2. Local weights directory
-    local_path = WEIGHTS_DIR / model_name
-    if local_path.exists():
-        return str(local_path)
-
-    # 3. Project root
-    root_path = BASE_DIR / model_name
-    if root_path.exists():
-        return str(root_path)
-
-    # 4. Known sibling project directories
-    candidates = [
-        BASE_DIR.parent / "Project_Aparsoft" / "RoadIQ-Aparsoft-Project-main" / "weights" / model_name,
-        BASE_DIR.parent / "Project_Aparsoft" / "RoadIQ-Aparsoft-Project-backup" / "weights" / model_name,
-        BASE_DIR.parent / "RoadIQ-Aparsoft-Project-main" / "weights" / model_name,
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
+    root_path = BASE_DIR / candidate.name
+    if root_path.is_file():
+        return str(root_path.resolve())
 
     return model_name
 
 
 def sweep_stray_weights() -> None:
-    """
-    Move .pt files from the project root into weights/.
-    """
-
-    WEIGHTS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
+    """Move stray checkpoint files from the project root into ``weights/`` safely."""
+    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
     for file in BASE_DIR.glob("*.pt"):
-
         destination = WEIGHTS_DIR / file.name
-
         if destination.exists():
             continue
-
         try:
-            shutil.move(
-                str(file),
-                str(destination),
-            )
-
-        except Exception:
-            pass
+            shutil.move(str(file), str(destination))
+        except OSError:
+            # A file move should never stop inference.
+            continue

@@ -131,7 +131,15 @@ def render(
     hits = Counter()
     confirmed = set()
 
-    frame_slot = st.empty()
+    # Live comparison: original and annotated frames update side by side.
+    original_col, result_col = st.columns(2)
+    with original_col:
+        st.markdown("#### Original video")
+        original_frame_slot = st.empty()
+    with result_col:
+        st.markdown("#### Live detection result")
+        result_frame_slot = st.empty()
+    status_slot = st.empty()
     progress = st.progress(0.0)
 
     frame_idx = 0
@@ -200,11 +208,13 @@ def render(
                 annotated
             )
 
-            frame_slot.image(
-                cv2.cvtColor(
-                    annotated,
-                    cv2.COLOR_BGR2RGB,
-                ),
+            original_frame_slot.image(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                channels="RGB",
+                use_container_width=True,
+            )
+            result_frame_slot.image(
+                cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB),
                 channels="RGB",
                 use_container_width=True,
             )
@@ -220,6 +230,14 @@ def render(
             violations = max(
                 violations,
                 len(confirmed),
+            )
+
+            # Report detections while the video is being processed, not only at the end.
+            status_slot.info(
+                f"Processing frame {frame_idx + 1}"
+                + (f" / {total}" if total else "")
+                + f" · Active bikes: {len(analysis.bikes)}"
+                + f" · Confirmed triple-riding tracks: {len(confirmed)}"
             )
 
             frame_idx += 1
