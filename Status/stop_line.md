@@ -41,47 +41,47 @@ Only tests 7 and 9 have a stop line that plausibly matches the scene. In the oth
 ## Per-image detail
 
 ### Test 1
-![Test 1](stop_line/test01.png)
+![Test 1](Stop_line/test01.png)
 
 Junction queue with auto-rickshaws, cars, and motorcycles facing the camera, a signal head at the right, and a zebra crossing with pedestrians in the foreground. Detected `TRAFFIC SIGNAL: YELLOW (0.62)` and `APPROACH DIRECTION UNKNOWN | POSITION ONLY`. Counters: `Ahead of Stop Line 9, Behind Stop Line 0, At Stop Line 1, Total Vehicles 10`. The yellow stop line runs diagonally through the vehicle cluster, and with the direction unknown, 9 of 10 vehicles are labeled `AHEAD OF LINE` (offsets `+48px` to `+211px`) with one `?? AT STOP LINE | truck 36% (+5px)`. The ahead/behind result and the signal reading need a manual check. Auto-rickshaws are labeled `truck` and `bus` at 21–44%. The `SIGNAL: YELLOW` label is clipped at the right edge and the `STOP LINE | score` label is hidden by vehicle boxes.
 
 ### Test 2
-![Test 2](stop_line/test02.png)
+![Test 2](Stop_line/test02.png)
 
 Wide road with trees, a zebra crossing at the bottom right, a motorcycle crossing in the middle distance, and a cluster of auto-rickshaws and cars at the left. Detected `TRAFFIC SIGNAL: UNKNOWN (No traffic light housing detected in scene.)`. The Stop-Line & Zebra-Crossing Controls panel is collapsed, so the settings are not visible. The yellow stop line slopes steeply upward and leaves the road into the tree area at the right edge instead of following the zebra crossing. Nine vehicles are labeled `AHEAD OF LINE` (`car 59%`, `truck 35%`, `car 79%`, `bus 64%`, `bus 54%`, `car 39%` ×2, `truck 30%`, `truck 21%`) and two motorcycles `BEHIND LINE` (`-75px`, `-96px`). Because the line is misplaced, these classifications are not reliable. Auto-rickshaws are labeled `bus` and `truck`. The signal line text is faint against the background.
 
 ### Test 3
-![Test 3](stop_line/test03.png)
+![Test 3](Stop_line/test03.png)
 
 Crowded market street with a cargo three-wheeler in the center, a white hatchback at the right, and pedestrians at the left. There is no visible zebra crossing, stop line, or signal. Settings: `Traffic Moving Upward (Bottom to Top)`, `Auto-Detect from Scene`. Detected `TRAFFIC SIGNAL: UNKNOWN`, with the banner still reading `APPROACH DIRECTION UNKNOWN | POSITION ONLY`. Counters: `Ahead of Stop Line 5, Behind Stop Line 2, At Stop Line 1, Total Vehicles 8`. Only a small yellow segment of the stop line is visible at the right edge, so the pipeline fitted a line where none exists and classified every vehicle against it (`truck 86% (+49px)`, `car 91% (-5px)` at line, `motorcycle 25% (-13px)` behind, and others). Two motorcycle labels are at only 21–25% confidence. Banner text is mostly unreadable against the busy background.
 
 ### Test 4
-![Test 4](stop_line/test04.png)
+![Test 4](Stop_line/test04.png)
 
 Overhead view of an intersection with a zebra crossing, a white car, and a queue of scooters at the right. Settings: `Traffic Moving Leftward (Right to Left)`, `Auto-Detect from Scene`, Stop-Line Fine-Tuning `0`. Detected `TRAFFIC SIGNAL: UNKNOWN (No traffic light housing detected in scene.)` and `STOP LINE | score=0.88`. No vehicle boxes or labels are drawn at all, so the car and about ten scooters are all missed; the summary counters are not visible in the screenshot. The yellow line is a steep diagonal across the vehicle cluster, and the `STOP LINE` label overlaps the scooters at the top right. The approach direction banner line is missing from the overlay.
 
 ### Test 5
-![Test 5](stop_line/test05.png)
+![Test 5](Stop_line/test05.png)
 
 Close view of a dense crowd of helmeted motorcyclists with jeeps and rickshaws behind. There is no visible stop line or zebra crossing. Detected `TRAFFIC SIGNAL: UNKNOWN (No traffic light housing detected in sc...)` and `APPROACH DIRECTION UNKNOWN | POSITION ONLY`; both header lines are oversized and clipped at the right edge. `STOP LINE | score=0.88` is drawn as a diagonal across the lower part of the frame, so the line is spurious. Every legible label is `AHEAD OF LINE` with large offsets (`car 36% (+283px)`, `motorcycle 71% (+160px)`, `bus 40%`, `car 36% (+207px)`, `truck 38% (+347px)`, `motorcycle 27% (+353px)`, `truck 36% (+284px)`). Labels stack on top of each other, leaving fragments such as `192px)`, `110px)`, `7px)`, and `AHE? AHEAD OF LINE`. Summary counters are not visible in the screenshot.
 
 ### Test 6
-![Test 6](stop_line/test06.png)
+![Test 6](Stop_line/test06.png)
 
 Intersection with a white SUV and a dark sedan queued at the left and a scooter rider crossing the zebra at the right. Settings: `Traffic Moving Upward (Bottom to Top)`, `Auto-Detect from Scene`, Stop-Line Fine-Tuning `55`. Detected `TRAFFIC SIGNAL: UNKNOWN` and `STOP LINE | score=0.82`, with the banner reading `APPROACH DIRECTION UNKNOWN | POSITION ONLY` despite the manual direction. The yellow line is a short segment that passes through the scooter rider's upper body and sits well above the zebra crossing. Labels: `?? AT STOP LINE | car 87% (+5px)`, `?? AT STOP LINE | motorcycle 87% (+2px)`, `? AHEAD OF LINE | car 86% (+32px)`. The line placement makes these classifications unreliable. Summary counters are not visible in the screenshot.
 
 ### Test 7
-![Test 7](stop_line/test07.png)
+![Test 7](Stop_line/test07.png)
 
 Crosswalk with pedestrians crossing and a queue of yellow taxis and dark cars beyond it. Settings: `Auto-Detect from Scene (Recommended)`, `Enforce YELLOW Signal (Caution)`, Stop-Line Fine-Tuning `85`. Detected `TRAFFIC SIGNAL: YELLOW (1.00)`, which is the enforced value rather than a detection, and `APPROACH DIRECTION UNKNOWN | POSITION ONLY`. The yellow stop line is near-horizontal and appears to sit at the near (camera-side) edge of the zebra crossing. All 8 labeled cars are `BEHIND LINE` (`car 85% (-113px)`, `81% (-133px)`, `80% (-108px)`, `80% (-103px)`, `79% (-230px)`, `47% (-244px)`, `77% (-213px)`, `75% (-309px)`). The result is plausible, but the offsets may be overstated if the line should sit at the far edge of the zebra. The `STOP LINE | score` label is hidden behind a vehicle label. Summary counters are not visible in the screenshot.
 
 ### Test 8
-![Test 8](stop_line/test08.png)
+![Test 8](Stop_line/test08.png)
 
 Dense Dhaka street scene with auto-rickshaws, cars, and motorcycles, and a pedestrian walking across a zebra crossing at the right. Settings: `Auto-Detect from Scene (Recommended)`, `Enforce YELLOW Signal (Caution)`, Stop-Line Fine-Tuning `85`. Detected `TRAFFIC SIGNAL: YELLOW (1.00)` (enforced) with `APPROACH DIRECTION UNKNOWN | POSITION ONLY`; the signal line and `STOP LINE | score` text overlap and are garbled. The stop line is a steep, near-vertical segment at the far-left edge of the frame instead of running along the zebra crossing. As a result 8 vehicles are `BEHIND LINE` with extreme offsets (`motorcycle 49% (-1020px)`, `car 29% (-795px)`, `car 85% (-696px)`, `car 88% (-565px)`) and one is `?? AT STOP LINE | car 43% (-4px)`. The classifications are not meaningful. Summary counters are not visible in the screenshot.
 
 ### Test 9
-![Test 9](stop_line/test09.png)
+![Test 9](Stop_line/test09.png)
 
 Rainy junction with a queue of cars facing the camera and people with umbrellas near the front row. Settings: `Traffic Moving Downward (Top to Bottom)`, `Auto-Detect from Scene`, Stop-Line Fine-Tuning `0`. Detected `TRAFFIC SIGNAL: UNKNOWN (No traffic light housing detected in scene.)`, with the banner still reading `APPROACH DIRECTION UNKNOWN | POSITION ONLY`. The yellow stop line is near-horizontal and runs through the front bumpers of the queued cars. Labels: `?? AT STOP LINE | car 89% (-6px)`, `? AHEAD OF LINE | car 87% (+21px)`, `? AHEAD OF LINE | car 66% (+56px)`, and four `BEHIND LINE` cars (`74% (-20px)`, `83% (-16px)`, `59% (-101px)`, `47% (-144px)`). This is the most coherent result of the batch, but it still needs a manual check, and cars further back in the queue appear only partly covered. Summary counters are not visible in the screenshot.
 
